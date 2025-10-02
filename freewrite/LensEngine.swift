@@ -124,6 +124,7 @@ class Tokenizer {
 protocol WritingLens {
     var id: String { get }
     var name: String { get }
+    var description: String { get }
     var category: String { get }
     var requiresAI: Bool { get }
 
@@ -135,6 +136,7 @@ protocol WritingLens {
 struct PartsOfSpeechLens: WritingLens {
     let id = "pos"
     let name = "Parts of Speech"
+    let description = "Colors nouns, verbs, adjectives, adverbs, pronouns, and prepositions"
     let category = "Grammar"
     let requiresAI = false
 
@@ -155,7 +157,7 @@ struct PartsOfSpeechLens: WritingLens {
             guard let tag = token.lexicalClass,
                   let color = colors[tag] else { return nil }
             return Highlight(range: token.range,
-                           color: color.withAlphaComponent(0.3),
+                           color: color,
                            category: tag.rawValue,
                            priority: 1)
         }
@@ -165,6 +167,7 @@ struct PartsOfSpeechLens: WritingLens {
 struct AdverbLens: WritingLens {
     let id = "adverbs"
     let name = "Adverb Overuse"
+    let description = "Highlights adverbs and -ly words for concise writing"
     let category = "Style"
     let requiresAI = false
 
@@ -173,7 +176,7 @@ struct AdverbLens: WritingLens {
             let isAdverb = token.lexicalClass == .adverb || token.text.hasSuffix("ly")
             guard isAdverb else { return nil }
             return Highlight(range: token.range,
-                           color: FlexokiColors.NS.orange(for: colorScheme).withAlphaComponent(0.4),
+                           color: FlexokiColors.NS.orange(for: colorScheme),
                            category: "adverb",
                            priority: 2)
         }
@@ -183,6 +186,7 @@ struct AdverbLens: WritingLens {
 struct FillerLens: WritingLens {
     let id = "filler"
     let name = "Filler Words"
+    let description = "Identifies unnecessary words like 'very', 'really', 'just', 'actually'"
     let category = "Clarity"
     let requiresAI = false
 
@@ -195,7 +199,7 @@ struct FillerLens: WritingLens {
         document.tokens.compactMap { token in
             guard fillers.contains(token.text.lowercased()) else { return nil }
             return Highlight(range: token.range,
-                           color: FlexokiColors.NS.red(for: colorScheme).withAlphaComponent(0.4),
+                           color: FlexokiColors.NS.red(for: colorScheme),
                            category: "filler",
                            priority: 3)
         }
@@ -205,6 +209,7 @@ struct FillerLens: WritingLens {
 struct SentenceLengthLens: WritingLens {
     let id = "sentence-length"
     let name = "Sentence Length"
+    let description = "Shows sentence variety: green (short), yellow (medium), red (long)"
     let category = "Readability"
     let requiresAI = false
 
@@ -226,6 +231,7 @@ struct SentenceLengthLens: WritingLens {
 struct RepetitionLens: WritingLens {
     let id = "repetition"
     let name = "Word Repetition"
+    let description = "Highlights words used 3+ times to vary vocabulary"
     let category = "Style"
     let requiresAI = false
     let threshold = 3
@@ -236,7 +242,7 @@ struct RepetitionLens: WritingLens {
             .flatMap { _, tokens in
                 tokens.map { token in
                     Highlight(range: token.range,
-                            color: FlexokiColors.NS.purple(for: colorScheme).withAlphaComponent(0.3),
+                            color: FlexokiColors.NS.purple(for: colorScheme),
                             category: "repetition",
                             priority: 2)
                 }

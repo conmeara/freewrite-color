@@ -29,6 +29,46 @@ struct freewriteApp: App {
         .defaultSize(width: 1100, height: 600)
         .windowToolbarStyle(.unifiedCompact)
         .windowResizability(.contentSize)
+        .commands {
+            CommandMenu("Format") {
+                Menu("Font") {
+                    Button("Lato") {
+                        NotificationCenter.default.post(name: .fontChanged, object: "Lato-Regular")
+                    }
+                    .keyboardShortcut("1", modifiers: [.command])
+
+                    Button("Arial") {
+                        NotificationCenter.default.post(name: .fontChanged, object: "Arial")
+                    }
+                    .keyboardShortcut("2", modifiers: [.command])
+
+                    Button("System") {
+                        NotificationCenter.default.post(name: .fontChanged, object: ".AppleSystemUIFont")
+                    }
+                    .keyboardShortcut("3", modifiers: [.command])
+
+                    Button("Serif") {
+                        NotificationCenter.default.post(name: .fontChanged, object: "Times New Roman")
+                    }
+                    .keyboardShortcut("4", modifiers: [.command])
+
+                    Divider()
+
+                    Button("Random") {
+                        NotificationCenter.default.post(name: .fontChanged, object: "random")
+                    }
+                    .keyboardShortcut("5", modifiers: [.command])
+                }
+
+                Menu("Size") {
+                    ForEach([16, 18, 20, 22, 24, 26], id: \.self) { size in
+                        Button("\(size)px") {
+                            NotificationCenter.default.post(name: .fontSizeChanged, object: size)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -40,9 +80,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if window.styleMask.contains(.fullScreen) {
                 window.toggleFullScreen(nil)
             }
-            
+
             // Center the window on the screen
             window.center()
         }
     }
-} 
+}
+
+// Notification extensions for menu commands
+extension Notification.Name {
+    static let fontChanged = Notification.Name("fontChanged")
+    static let fontSizeChanged = Notification.Name("fontSizeChanged")
+}

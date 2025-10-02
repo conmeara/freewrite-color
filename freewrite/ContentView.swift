@@ -89,10 +89,11 @@ struct ContentView: View {
 
     // Lens engine state
     @State private var lensEngine = LensEngine()
-    @State private var enabledLensIds: Set<String> = ["adverbs"] // Default to adverbs lens
+    @State private var selectedLensId: String? = nil // Single lens selection, nil = no lens
     @State private var highlightRanges: [(range: NSRange, color: NSColor)] = []
     @State private var fastAnalysisTask: Task<Void, Never>?
     @State private var aiAnalysisTask: Task<Void, Never>?
+    @State private var showingLensSidebar = false // Left sidebar for lens selection
 
     // Legacy adjective highlighting (keep for AI lens migration)
     @State private var adjectiveHighlighter: Any?
@@ -398,12 +399,144 @@ struct ContentView: View {
     @State private var viewHeight: CGFloat = 0
     
     var body: some View {
-        let buttonBackground = FlexokiColors.bg(for: colorScheme)
         let navHeight: CGFloat = 68
         let textColor = FlexokiColors.tx2(for: colorScheme)
         let textHoverColor = FlexokiColors.tx(for: colorScheme)
         
         HStack(spacing: 0) {
+            // Left sidebar - Lens selector
+            if showingLensSidebar {
+                VStack(spacing: 0) {
+                    // Header
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Lenses")
+                                .font(.system(size: 13))
+                                .foregroundColor(textColor)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+
+                    Divider()
+
+                    // Lens list
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            // "No Lens" option
+                            Button(action: {
+                                selectedLensId = nil
+                                highlightRanges = []
+                            }) {
+                                HStack(alignment: .top, spacing: 12) {
+                                    // Radio button
+                                    Image(systemName: selectedLensId == nil ? "circle.fill" : "circle")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(selectedLensId == nil ? FlexokiColors.blue(for: colorScheme) : .secondary)
+
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("No Lens")
+                                            .font(.system(size: 13))
+                                            .foregroundColor(.primary)
+                                        Text("Clear all highlighting")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+
+                                    Spacer()
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 12)
+                                .background(selectedLensId == nil ? FlexokiColors.ui(for: colorScheme) : Color.clear)
+                            }
+                            .buttonStyle(.plain)
+
+                            Divider()
+
+                            // Lenses grouped by category
+                            ForEach(["Grammar", "Style", "Clarity", "Readability"], id: \.self) { category in
+                                let categoryLenses = lensEngine.availableLenses.filter { $0.category == category }
+                                if !categoryLenses.isEmpty {
+                                    // Category header
+                                    HStack {
+                                        Text(category)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.secondary)
+                                            .textCase(.uppercase)
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 16)
+                                    .padding(.top, 12)
+                                    .padding(.bottom, 6)
+
+                                    // Lenses in this category
+                                    ForEach(categoryLenses, id: \.id) { lens in
+                                        Button(action: {
+                                            selectedLensId = lens.id
+
+                                            // Trigger re-analysis
+                                            fastAnalysisTask?.cancel()
+                                            fastAnalysisTask = Task { @MainActor in
+                                                let highlights = await lensEngine.analyze(
+                                                    text: text,
+                                                    enabledLensIds: [lens.id],
+                                                    colorScheme: colorScheme
+                                                )
+                                                highlightRanges = highlights.map { ($0.range, $0.color) }
+                                            }
+                                        }) {
+                                            HStack(alignment: .top, spacing: 12) {
+                                                // Radio button
+                                                Image(systemName: selectedLensId == lens.id ? "circle.fill" : "circle")
+                                                    .font(.system(size: 12))
+                                                    .foregroundColor(selectedLensId == lens.id ? FlexokiColors.blue(for: colorScheme) : .secondary)
+
+                                                VStack(alignment: .leading, spacing: 4) {
+                                                    HStack {
+                                                        Text(lens.name)
+                                                            .font(.system(size: 13))
+                                                            .foregroundColor(.primary)
+                                                        if lens.requiresAI {
+                                                            Image(systemName: "sparkles")
+                                                                .font(.system(size: 10))
+                                                                .foregroundColor(.secondary)
+                                                        }
+                                                    }
+                                                    Text(lens.description)
+                                                        .font(.system(size: 11))
+                                                        .foregroundColor(.secondary)
+                                                        .fixedSize(horizontal: false, vertical: true)
+                                                }
+
+                                                Spacer()
+                                            }
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .padding(.horizontal, 16)
+                                            .padding(.vertical, 12)
+                                            .background(selectedLensId == lens.id ? FlexokiColors.ui(for: colorScheme) : Color.clear)
+                                        }
+                                        .buttonStyle(.plain)
+
+                                        if lens.id != categoryLenses.last?.id {
+                                            Divider()
+                                                .padding(.leading, 16)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .scrollIndicators(.never)
+                }
+                .frame(width: 280)
+                .background(FlexokiColors.bg(for: colorScheme))
+
+                Divider()
+            }
+
             // Main content
             ZStack {
                 FlexokiColors.bg(for: colorScheme)
@@ -461,18 +594,20 @@ struct ContentView: View {
                 VStack {
                     Spacer()
                     HStack {
-                        // Font buttons (moved to left)
+                        // Lens selector (left side)
                         HStack(spacing: 8) {
-                            Button(fontSizeButtonTitle) {
-                                if let currentIndex = fontSizes.firstIndex(of: fontSize) {
-                                    let nextIndex = (currentIndex + 1) % fontSizes.count
-                                    fontSize = fontSizes[nextIndex]
+                            // Glasses icon - opens sidebar
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showingLensSidebar.toggle()
                                 }
+                            }) {
+                                Image(systemName: "eyeglasses")
                             }
                             .buttonStyle(.plain)
-                            .foregroundColor(isHoveringSize ? textHoverColor : textColor)
+                            .foregroundColor(isHoveringLensMenu ? textHoverColor : textColor)
                             .onHover { hovering in
-                                isHoveringSize = hovering
+                                isHoveringLensMenu = hovering
                                 isHoveringBottomNav = hovering
                                 if hovering {
                                     NSCursor.pointingHand.push()
@@ -480,101 +615,44 @@ struct ContentView: View {
                                     NSCursor.pop()
                                 }
                             }
-                            
-                            Text("•")
-                                .foregroundColor(.gray)
-                            
-                            Button("Lato") {
-                                selectedFont = "Lato-Regular"
-                                currentRandomFont = ""
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(hoveredFont == "Lato" ? textHoverColor : textColor)
-                            .onHover { hovering in
-                                hoveredFont = hovering ? "Lato" : nil
-                                isHoveringBottomNav = hovering
-                                if hovering {
-                                    NSCursor.pointingHand.push()
-                                } else {
-                                    NSCursor.pop()
+
+                            // Current lens name - opens sidebar (only show if lens is selected and panel is closed)
+                            if let lensId = selectedLensId, !showingLensSidebar {
+                                Button(action: {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showingLensSidebar.toggle()
+                                    }
+                                }) {
+                                    Text(lensEngine.availableLenses.first(where: { $0.id == lensId })?.name ?? "")
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundColor(textColor)
+                                .onHover { hovering in
+                                    isHoveringBottomNav = hovering
+                                    if hovering {
+                                        NSCursor.pointingHand.push()
+                                    } else {
+                                        NSCursor.pop()
+                                    }
                                 }
                             }
-                            
-                            Text("•")
-                                .foregroundColor(.gray)
-                            
-                            Button("Arial") {
-                                selectedFont = "Arial"
-                                currentRandomFont = ""
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(hoveredFont == "Arial" ? textHoverColor : textColor)
-                            .onHover { hovering in
-                                hoveredFont = hovering ? "Arial" : nil
-                                isHoveringBottomNav = hovering
-                                if hovering {
-                                    NSCursor.pointingHand.push()
-                                } else {
-                                    NSCursor.pop()
+
+                            // Cycle arrow - cycles to next lens (hide when panel is open)
+                            if !showingLensSidebar {
+                                Button(action: {
+                                    cycleLens()
+                                }) {
+                                    Image(systemName: "chevron.right")
                                 }
-                            }
-                            
-                            Text("•")
-                                .foregroundColor(.gray)
-                            
-                            Button("System") {
-                                selectedFont = ".AppleSystemUIFont"
-                                currentRandomFont = ""
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(hoveredFont == "System" ? textHoverColor : textColor)
-                            .onHover { hovering in
-                                hoveredFont = hovering ? "System" : nil
-                                isHoveringBottomNav = hovering
-                                if hovering {
-                                    NSCursor.pointingHand.push()
-                                } else {
-                                    NSCursor.pop()
-                                }
-                            }
-                            
-                            Text("•")
-                                .foregroundColor(.gray)
-                            
-                            Button("Serif") {
-                                selectedFont = "Times New Roman"
-                                currentRandomFont = ""
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(hoveredFont == "Serif" ? textHoverColor : textColor)
-                            .onHover { hovering in
-                                hoveredFont = hovering ? "Serif" : nil
-                                isHoveringBottomNav = hovering
-                                if hovering {
-                                    NSCursor.pointingHand.push()
-                                } else {
-                                    NSCursor.pop()
-                                }
-                            }
-                            
-                            Text("•")
-                                .foregroundColor(.gray)
-                            
-                            Button(randomButtonTitle) {
-                                if let randomFont = availableFonts.randomElement() {
-                                    selectedFont = randomFont
-                                    currentRandomFont = randomFont
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(hoveredFont == "Random" ? textHoverColor : textColor)
-                            .onHover { hovering in
-                                hoveredFont = hovering ? "Random" : nil
-                                isHoveringBottomNav = hovering
-                                if hovering {
-                                    NSCursor.pointingHand.push()
-                                } else {
-                                    NSCursor.pop()
+                                .buttonStyle(.plain)
+                                .foregroundColor(textColor)
+                                .onHover { hovering in
+                                    isHoveringBottomNav = hovering
+                                    if hovering {
+                                        NSCursor.pointingHand.push()
+                                    } else {
+                                        NSCursor.pop()
+                                    }
                                 }
                             }
                         }
@@ -779,7 +857,7 @@ struct ContentView: View {
                                 .cornerRadius(8)
                                 .shadow(color: FlexokiColors.black.opacity(0.1), radius: 4, y: 2)
                                 // Reset copied state when popover dismisses
-                                .onChange(of: showingChatMenu) { newValue in
+                                .onChange(of: showingChatMenu) { _, newValue in
                                     if !newValue {
                                         didCopyPrompt = false
                                     }
@@ -827,64 +905,6 @@ struct ContentView: View {
                                 }
                             }
                             
-                            Text("•")
-                                .foregroundColor(.gray)
-
-                            // Lens selector
-                            Menu {
-                                ForEach(["Grammar", "Style", "Clarity", "Readability"], id: \.self) { category in
-                                    let categoryLenses = lensEngine.availableLenses.filter { $0.category == category }
-                                    if !categoryLenses.isEmpty {
-                                        Section(category) {
-                                            ForEach(categoryLenses, id: \.id) { lens in
-                                                Toggle(isOn: Binding(
-                                                    get: { enabledLensIds.contains(lens.id) },
-                                                    set: { enabled in
-                                                        if enabled {
-                                                            enabledLensIds.insert(lens.id)
-                                                        } else {
-                                                            enabledLensIds.remove(lens.id)
-                                                        }
-                                                        // Trigger re-analysis
-                                                        fastAnalysisTask?.cancel()
-                                                        fastAnalysisTask = Task { @MainActor in
-                                                            let highlights = await lensEngine.analyze(
-                                                                text: text,
-                                                                enabledLensIds: enabledLensIds,
-                                                                colorScheme: colorScheme
-                                                            )
-                                                            highlightRanges = highlights.map { ($0.range, $0.color) }
-                                                        }
-                                                    }
-                                                )) {
-                                                    HStack {
-                                                        Text(lens.name)
-                                                        if lens.requiresAI {
-                                                            Image(systemName: "sparkles")
-                                                                .font(.system(size: 10))
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            } label: {
-                                Image(systemName: "eyeglasses")
-                                    .foregroundColor(isHoveringLensMenu ? textHoverColor : textColor)
-                            }
-                            .menuStyle(.borderlessButton)
-                            .fixedSize()
-                            .onHover { hovering in
-                                isHoveringLensMenu = hovering
-                                isHoveringBottomNav = hovering
-                                if hovering {
-                                    NSCursor.pointingHand.push()
-                                } else {
-                                    NSCursor.pop()
-                                }
-                            }
-
                             Text("•")
                                 .foregroundColor(.gray)
 
@@ -1105,6 +1125,7 @@ struct ContentView: View {
         }
         .frame(minWidth: 1100, minHeight: 600)
         .animation(.easeInOut(duration: 0.2), value: showingSidebar)
+        .animation(.easeInOut(duration: 0.2), value: showingLensSidebar)
         .preferredColorScheme(colorScheme)
         .onAppear {
             showingSidebar = false  // Hide sidebar by default
@@ -1113,6 +1134,24 @@ struct ContentView: View {
             // Initialize adjective highlighter if available
             if #available(macOS 26.0, *) {
                 adjectiveHighlighter = AdjectiveHighlighter()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fontChanged)) { notification in
+            if let fontName = notification.object as? String {
+                if fontName == "random" {
+                    if let randomFont = availableFonts.randomElement() {
+                        selectedFont = randomFont
+                        currentRandomFont = randomFont
+                    }
+                } else {
+                    selectedFont = fontName
+                    currentRandomFont = ""
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fontSizeChanged)) { notification in
+            if let size = notification.object as? CGFloat {
+                fontSize = size
             }
         }
         .onChange(of: text) { _, newValue in
@@ -1128,12 +1167,16 @@ struct ContentView: View {
                 try? await Task.sleep(for: .milliseconds(200))
                 guard !Task.isCancelled else { return }
 
-                let highlights = await lensEngine.analyze(
-                    text: newValue,
-                    enabledLensIds: enabledLensIds,
-                    colorScheme: colorScheme
-                )
-                highlightRanges = highlights.map { ($0.range, $0.color) }
+                if let lensId = selectedLensId {
+                    let highlights = await lensEngine.analyze(
+                        text: newValue,
+                        enabledLensIds: [lensId],
+                        colorScheme: colorScheme
+                    )
+                    highlightRanges = highlights.map { ($0.range, $0.color) }
+                } else {
+                    highlightRanges = []
+                }
             }
 
             // AI lenses: 3s debounce (for future AI lenses)
@@ -1142,15 +1185,17 @@ struct ContentView: View {
                 try? await Task.sleep(for: .seconds(3))
                 guard !Task.isCancelled else { return }
 
-                let aiHighlights = await lensEngine.analyzeWithAI(
-                    text: newValue,
-                    enabledLensIds: enabledLensIds,
-                    colorScheme: colorScheme
-                )
+                if let lensId = selectedLensId {
+                    let aiHighlights = await lensEngine.analyzeWithAI(
+                        text: newValue,
+                        enabledLensIds: [lensId],
+                        colorScheme: colorScheme
+                    )
 
-                // Merge with existing fast highlights
-                let combined = highlightRanges.map { Highlight(range: $0.range, color: $0.color, category: "", priority: 1) } + aiHighlights
-                highlightRanges = mergeHighlights(combined)
+                    // Merge with existing fast highlights
+                    let combined = highlightRanges.map { Highlight(range: $0.range, color: $0.color, category: "", priority: 1) } + aiHighlights
+                    highlightRanges = mergeHighlights(combined)
+                }
             }
         }
         .onReceive(timer) { _ in
@@ -1255,11 +1300,44 @@ struct ContentView: View {
         }
     }
     
+    private func cycleLens() {
+        let allLenses = lensEngine.availableLenses
+
+        if let currentId = selectedLensId,
+           let currentIndex = allLenses.firstIndex(where: { $0.id == currentId }) {
+            // Move to next lens
+            let nextIndex = (currentIndex + 1) % (allLenses.count + 1) // +1 for "No Lens"
+            if nextIndex == allLenses.count {
+                selectedLensId = nil // Back to "No Lens"
+            } else {
+                selectedLensId = allLenses[nextIndex].id
+            }
+        } else {
+            // No lens selected, select first lens
+            selectedLensId = allLenses.first?.id
+        }
+
+        // Trigger re-analysis
+        fastAnalysisTask?.cancel()
+        fastAnalysisTask = Task { @MainActor in
+            if let lensId = selectedLensId {
+                let highlights = await lensEngine.analyze(
+                    text: text,
+                    enabledLensIds: [lensId],
+                    colorScheme: colorScheme
+                )
+                highlightRanges = highlights.map { ($0.range, $0.color) }
+            } else {
+                highlightRanges = []
+            }
+        }
+    }
+
     private func createNewEntry() {
         let newEntry = HumanEntry.createNew()
         entries.insert(newEntry, at: 0) // Add to the beginning
         selectedEntryId = newEntry.id
-        
+
         // If this is the first entry (entries was empty before adding this one)
         if entries.count == 1 {
             // Read welcome message from default.md

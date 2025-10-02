@@ -1,6 +1,6 @@
 //
-//  freewriteApp.swift
-//  freewrite
+//  WritersLensApp.swift
+//  Writers Lens
 //
 //  Created by thorfinn on 2/14/25.
 //
@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct freewriteApp: App {
+struct WritersLensApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @AppStorage("colorScheme") private var colorSchemeString: String = "light"
     
@@ -66,6 +66,18 @@ struct freewriteApp: App {
                             NotificationCenter.default.post(name: .fontSizeChanged, object: size)
                         }
                     }
+                }
+            }
+
+            CommandGroup(replacing: .appInfo) {
+                Button("About Writers Lens") {
+                    NSApplication.shared.orderFrontStandardAboutPanel(
+                        options: [
+                            .applicationName: "Writers Lens",
+                            .applicationVersion: "1.0",
+                            .credits: NSAttributedString(string: "Based on Freewrite by Farza\ngithub.com/farzaa/freewrite\n\nWriters Lens adds real-time writing analysis with multiple lenses for improving your prose.")
+                        ]
+                    )
                 }
             }
         }

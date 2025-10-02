@@ -1,7 +1,7 @@
 // Swift 5.0
 //
 //  ContentView.swift
-//  freewrite
+//  Writers Lens
 //
 //  Created by thorfinn on 2/14/25.
 //
@@ -106,14 +106,14 @@ struct ContentView: View {
     let standardFonts = ["Lato-Regular", "Arial", ".AppleSystemUIFont", "Times New Roman"]
     let fontSizes: [CGFloat] = [16, 18, 20, 22, 24, 26]
     let placeholderOptions = [
-        "\n\nBegin writing",
-        "\n\nPick a thought and go",
-        "\n\nStart typing",
-        "\n\nWhat's on your mind",
-        "\n\nJust start",
-        "\n\nType your first thought",
-        "\n\nStart with one sentence",
-        "\n\nJust say it"
+        "Begin writing",
+        "Pick a thought and go",
+        "Start typing",
+        "What's on your mind",
+        "Just start",
+        "Type your first thought",
+        "Start with one sentence",
+        "Just say it"
     ]
     
     // Add file manager and save timer
@@ -122,13 +122,13 @@ struct ContentView: View {
     
     // Add cached documents directory
     private let documentsDirectory: URL = {
-        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Freewrite")
-        
-        // Create Freewrite directory if it doesn't exist
+        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("WritersLens")
+
+        // Create WritersLens directory if it doesn't exist
         if !FileManager.default.fileExists(atPath: directory.path) {
             do {
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                print("Successfully created Freewrite directory")
+                print("Successfully created WritersLens directory")
             } catch {
                 print("Error creating directory: \(error)")
             }
@@ -306,7 +306,7 @@ struct ContentView: View {
             }
             
             // Check if we have only one entry and it's the welcome message
-            let hasOnlyWelcomeEntry = entries.count == 1 && entriesWithDates.first?.content.contains("Welcome to Freewrite.") == true
+            let hasOnlyWelcomeEntry = entries.count == 1 && entriesWithDates.first?.content.contains("Welcome to Writers Lens") == true
             
             if entries.isEmpty {
                 // First time user - create entry with welcome message
@@ -383,8 +383,9 @@ struct ContentView: View {
     }
     
     var placeholderOffset: CGFloat {
-        // Instead of using calculated line height, use a simple offset
-        return fontSize / 2
+        // Offset to position after the leading "\n\n"
+        // Each line is approximately fontSize * 1.5 tall
+        return fontSize * 1.5 * 2
     }
     
     // Add a color utility computed property
@@ -566,23 +567,6 @@ struct ContentView: View {
                 .padding(.bottom, bottomNavOpacity > 0 ? navHeight : 0)
                 .ignoresSafeArea()
                 .colorScheme(colorScheme)
-                    .onAppear {
-                        placeholderText = placeholderOptions.randomElement() ?? "\n\nBegin writing"
-                        // Removed findSubview code which was causing errors
-                    }
-                    .overlay(
-                        ZStack(alignment: .topLeading) {
-                            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                Text(placeholderText)
-                                    .font(.custom(selectedFont, size: fontSize))
-                                    .foregroundColor(colorScheme == .light ? .gray.opacity(0.5) : .gray.opacity(0.6))
-                                // .padding(.top, 8)
-                                // .padding(.leading, 8)
-                                    .allowsHitTesting(false)
-                                    .offset(x: 5, y: placeholderOffset)
-                            }
-                        }, alignment: .topLeading
-                    )
                     .onGeometryChange(for: CGFloat.self) { proxy in
                                     proxy.size.height
                                 } action: { height in
@@ -1353,7 +1337,7 @@ struct ContentView: View {
             // Regular new entry starts with newlines
             text = "\n\n"
             // Randomize placeholder text for new entry
-            placeholderText = placeholderOptions.randomElement() ?? "\n\nBegin writing"
+            placeholderText = placeholderOptions.randomElement() ?? "Begin writing"
             // Save the empty entry
             saveEntry(entry: newEntry)
         }

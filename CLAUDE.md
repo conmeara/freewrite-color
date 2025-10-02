@@ -4,16 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is **freewrite-color**, a fork of the freewrite macOS journaling app with AI-powered text highlighting. It's a native SwiftUI app that uses Apple's on-device Foundation Models framework to analyze and color text as you write.
+This is **Writers Lens**, a macOS writing analysis app with real-time text highlighting. It's a native SwiftUI app that uses Apple's on-device Foundation Models framework and Natural Language framework to analyze and highlight writing patterns.
+
+Forked from the original Freewrite app by Farza (github.com/farzaa/freewrite).
 
 ## Build Commands
 
 ```bash
 # Build the app
-xcodebuild -scheme freewrite -configuration Debug build
+xcodebuild -scheme WritersLens -configuration Debug build
 
 # Build and run (use Xcode UI for best experience)
-# Open freewrite.xcodeproj in Xcode and click Run
+# Open WritersLens.xcodeproj in Xcode and click Run
 ```
 
 ## System Requirements
@@ -41,28 +43,29 @@ The app replaces SwiftUI's `TextEditor` (which doesn't support attributed text) 
    - Manages `highlightRanges` state array
    - Triggers highlighting on text changes with debouncing
 
-### AI Highlighting System
+### Writing Analysis System
 
-The app uses Apple's **Foundation Models framework** for on-device text analysis:
+The app uses a **lens-based architecture** for real-time text analysis:
 
-1. **AdjectiveHighlighter** (`AdjectiveHighlighter.swift`)
-   - Uses `LanguageModelSession` for AI inference
-   - Defines `@Generable` structs (`AdjectiveAnalysis`, `AdjectiveMatch`) for structured output
-   - `findAdjectives(in:)` streams responses and returns adjective positions
-   - **Critical**: `LanguageModelSession` does NOT allow concurrent requests
+1. **LensEngine** (`LensEngine.swift`)
+   - Manages multiple writing analysis lenses
+   - Available lenses: Parts of Speech, Adverb Overuse, Passive Voice, Filler Words, Sentence Length, Word Repetition
+   - Each lens implements the `WritingLens` protocol
+   - Uses Natural Language framework for tokenization and linguistic analysis
+   - Some lenses can use Foundation Models for AI-powered analysis (marked with `requiresAI: true`)
 
 2. **Concurrency Management** (in `ContentView.swift`)
-   - `highlightingTask: Task<Void, Never>?` - Tracks current task
-   - `isHighlighting: Bool` - Prevents concurrent AI calls
-   - On text change: cancels previous task, starts new one after 3-second delay
-   - Guards prevent concurrent `LanguageModelSession` requests (will error otherwise)
+   - `analysisTask: Task<Void, Never>?` - Tracks current analysis task
+   - `isAnalyzing: Bool` - Prevents concurrent analysis runs
+   - On text change: cancels previous task, starts new one with debouncing
+   - Lens selection: user can select one lens at a time via sidebar UI
 
 ### Data Flow
 
 ```
-User types → onChange(text) → Cancel previous task → Wait 3s →
-Check !isHighlighting → AdjectiveHighlighter.findAdjectives() →
-AI returns positions → Convert to NSRange → Update highlightRanges →
+User types → onChange(text) → Cancel previous task → Debounce →
+Check !isAnalyzing → LensEngine.analyze() →
+Lens returns highlights → Convert to NSRange → Update highlightRanges →
 ColoredTextEditor applies colors via NSAttributedString
 ```
 
@@ -92,7 +95,7 @@ Text must always start with `"\n\n"` (enforced in `ContentView`). The custom edi
 
 ### File Storage
 
-Entries are saved as markdown files in `~/Documents/Freewrite/` with pattern:
+Entries are saved as markdown files in `~/Documents/WritersLens/` with pattern:
 ```
 [uuid]-[yyyy-MM-dd-HH-mm-ss].md
 ```
@@ -117,11 +120,13 @@ Entries are saved as markdown files in `~/Documents/Freewrite/` with pattern:
 
 ## File Organization
 
-- `freewriteApp.swift` - App entry point, font registration
+- `WritersLensApp.swift` - App entry point, font registration, menu commands
 - `ContentView.swift` - Main UI and business logic (monolithic by design)
 - `ColoredTextEditor.swift` - Custom editable text view with color support
-- `AdjectiveHighlighter.swift` - AI-powered adjective detection
-- `AdjectiveHighlightTestView.swift` - Standalone test view for highlighting
+- `LensEngine.swift` - Writing analysis lens system and implementations
+- `FlexokiColors.swift` - Color palette for lens highlighting
+- `AdjectiveHighlighter.swift` - Legacy AI-powered adjective detection (kept for reference)
+- `AdjectiveHighlightTestView.swift` - Standalone test view (kept for reference)
 - `TextAnalysisTest.swift` - Original MVP test (kept for reference)
-- `default.md` - Welcome message for first-time users
+- `default.md` - Welcome/demo message for first-time users
 - `fonts/` - Lato font family (registered at app launch)

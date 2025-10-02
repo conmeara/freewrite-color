@@ -84,13 +84,19 @@ struct ContentView: View {
     @State private var isHoveringHistoryArrow = false
     @State private var colorScheme: ColorScheme = .light // Add state for color scheme
     @State private var isHoveringThemeToggle = false // Add state for theme toggle hover
+    @State private var isHoveringLensMenu = false // Add state for lens menu hover
     @State private var didCopyPrompt: Bool = false // Add state for copy prompt feedback
 
-    // Adjective highlighting state
+    // Lens engine state
+    @State private var lensEngine = LensEngine()
+    @State private var enabledLensIds: Set<String> = ["adverbs"] // Default to adverbs lens
     @State private var highlightRanges: [(range: NSRange, color: NSColor)] = []
-    @State private var adjectiveHighlighter: Any? // Using Any to avoid availability check
-    @State private var highlightingTask: Task<Void, Never>? // Track current highlighting task
-    @State private var isHighlighting = false // Track if currently highlighting
+    @State private var fastAnalysisTask: Task<Void, Never>?
+    @State private var aiAnalysisTask: Task<Void, Never>?
+
+    // Legacy adjective highlighting (keep for AI lens migration)
+    @State private var adjectiveHighlighter: Any?
+    @State private var isHighlighting = false
 
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     let entryHeight: CGFloat = 40
@@ -382,25 +388,25 @@ struct ContentView: View {
     
     // Add a color utility computed property
     var popoverBackgroundColor: Color {
-        return colorScheme == .light ? Color(NSColor.controlBackgroundColor) : Color(NSColor.darkGray)
+        return FlexokiColors.bg2(for: colorScheme)
     }
-    
+
     var popoverTextColor: Color {
-        return colorScheme == .light ? Color.primary : Color.white
+        return FlexokiColors.tx(for: colorScheme)
     }
     
     @State private var viewHeight: CGFloat = 0
     
     var body: some View {
-        let buttonBackground = colorScheme == .light ? Color.white : Color.black
+        let buttonBackground = FlexokiColors.bg(for: colorScheme)
         let navHeight: CGFloat = 68
-        let textColor = colorScheme == .light ? Color.gray : Color.gray.opacity(0.8)
-        let textHoverColor = colorScheme == .light ? Color.black : Color.white
+        let textColor = FlexokiColors.tx2(for: colorScheme)
+        let textHoverColor = FlexokiColors.tx(for: colorScheme)
         
         HStack(spacing: 0) {
             // Main content
             ZStack {
-                Color(colorScheme == .light ? .white : .black)
+                FlexokiColors.bg(for: colorScheme)
                     .ignoresSafeArea()
 
 
@@ -418,8 +424,8 @@ struct ContentView: View {
                     ),
                     highlightRanges: $highlightRanges,
                     font: NSFont(name: selectedFont, size: fontSize) ?? .systemFont(ofSize: fontSize),
-                    textColor: colorScheme == .light ? NSColor(red: 0.20, green: 0.20, blue: 0.20, alpha: 1.0) : NSColor(red: 0.9, green: 0.9, blue: 0.9, alpha: 1.0),
-                    backgroundColor: colorScheme == .light ? .white : .black,
+                    textColor: FlexokiColors.NS.tx(for: colorScheme),
+                    backgroundColor: FlexokiColors.NS.bg(for: colorScheme),
                     lineSpacing: lineHeight,
                     maxWidth: 650
                 )
@@ -771,7 +777,7 @@ struct ContentView: View {
                                 .frame(minWidth: 120, maxWidth: 250) // Allow width to adjust
                                 .background(popoverBackgroundColor)
                                 .cornerRadius(8)
-                                .shadow(color: Color.black.opacity(0.1), radius: 4, y: 2)
+                                .shadow(color: FlexokiColors.black.opacity(0.1), radius: 4, y: 2)
                                 // Reset copied state when popover dismisses
                                 .onChange(of: showingChatMenu) { newValue in
                                     if !newValue {
@@ -823,7 +829,65 @@ struct ContentView: View {
                             
                             Text("•")
                                 .foregroundColor(.gray)
-                            
+
+                            // Lens selector
+                            Menu {
+                                ForEach(["Grammar", "Style", "Clarity", "Readability"], id: \.self) { category in
+                                    let categoryLenses = lensEngine.availableLenses.filter { $0.category == category }
+                                    if !categoryLenses.isEmpty {
+                                        Section(category) {
+                                            ForEach(categoryLenses, id: \.id) { lens in
+                                                Toggle(isOn: Binding(
+                                                    get: { enabledLensIds.contains(lens.id) },
+                                                    set: { enabled in
+                                                        if enabled {
+                                                            enabledLensIds.insert(lens.id)
+                                                        } else {
+                                                            enabledLensIds.remove(lens.id)
+                                                        }
+                                                        // Trigger re-analysis
+                                                        fastAnalysisTask?.cancel()
+                                                        fastAnalysisTask = Task { @MainActor in
+                                                            let highlights = await lensEngine.analyze(
+                                                                text: text,
+                                                                enabledLensIds: enabledLensIds,
+                                                                colorScheme: colorScheme
+                                                            )
+                                                            highlightRanges = highlights.map { ($0.range, $0.color) }
+                                                        }
+                                                    }
+                                                )) {
+                                                    HStack {
+                                                        Text(lens.name)
+                                                        if lens.requiresAI {
+                                                            Image(systemName: "sparkles")
+                                                                .font(.system(size: 10))
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "eyeglasses")
+                                    .foregroundColor(isHoveringLensMenu ? textHoverColor : textColor)
+                            }
+                            .menuStyle(.borderlessButton)
+                            .fixedSize()
+                            .onHover { hovering in
+                                isHoveringLensMenu = hovering
+                                isHoveringBottomNav = hovering
+                                if hovering {
+                                    NSCursor.pointingHand.push()
+                                } else {
+                                    NSCursor.pop()
+                                }
+                            }
+
+                            Text("•")
+                                .foregroundColor(.gray)
+
                             // Theme toggle button
                             Button(action: {
                                 colorScheme = colorScheme == .light ? .dark : .light
@@ -874,7 +938,7 @@ struct ContentView: View {
                         }
                     }
                     .padding()
-                    .background(Color(colorScheme == .light ? .white : .black))
+                    .background(FlexokiColors.bg(for: colorScheme))
                     .opacity(bottomNavOpacity)
                     .onHover { hovering in
                         isHoveringBottomNav = hovering
@@ -1036,7 +1100,7 @@ struct ContentView: View {
                     .scrollIndicators(.never)
                 }
                 .frame(width: 200)
-                .background(Color(colorScheme == .light ? .white : NSColor.black))
+                .background(FlexokiColors.bg(for: colorScheme))
             }
         }
         .frame(minWidth: 1100, minHeight: 600)
@@ -1051,30 +1115,42 @@ struct ContentView: View {
                 adjectiveHighlighter = AdjectiveHighlighter()
             }
         }
-        .onChange(of: text) { _ in
+        .onChange(of: text) { _, newValue in
             // Save current entry when text changes
             if let currentId = selectedEntryId,
                let currentEntry = entries.first(where: { $0.id == currentId }) {
                 saveEntry(entry: currentEntry)
             }
 
-            // Trigger adjective highlighting after user stops typing (debounced)
-            if #available(macOS 26.0, *) {
-                // Cancel previous highlighting task
-                highlightingTask?.cancel()
+            // Fast lenses: 200ms debounce
+            fastAnalysisTask?.cancel()
+            fastAnalysisTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(200))
+                guard !Task.isCancelled else { return }
 
-                // Start new debounced highlighting task
-                highlightingTask = Task {
-                    try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 second delay
+                let highlights = await lensEngine.analyze(
+                    text: newValue,
+                    enabledLensIds: enabledLensIds,
+                    colorScheme: colorScheme
+                )
+                highlightRanges = highlights.map { ($0.range, $0.color) }
+            }
 
-                    // Check if task was cancelled during sleep
-                    guard !Task.isCancelled else { return }
+            // AI lenses: 3s debounce (for future AI lenses)
+            aiAnalysisTask?.cancel()
+            aiAnalysisTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { return }
 
-                    // Check if not already highlighting
-                    guard !isHighlighting else { return }
+                let aiHighlights = await lensEngine.analyzeWithAI(
+                    text: newValue,
+                    enabledLensIds: enabledLensIds,
+                    colorScheme: colorScheme
+                )
 
-                    await highlightAdjectives()
-                }
+                // Merge with existing fast highlights
+                let combined = highlightRanges.map { Highlight(range: $0.range, color: $0.color, category: "", priority: 1) } + aiHighlights
+                highlightRanges = mergeHighlights(combined)
             }
         }
         .onReceive(timer) { _ in
@@ -1099,14 +1175,39 @@ struct ContentView: View {
     
     private func backgroundColor(for entry: HumanEntry) -> Color {
         if entry.id == selectedEntryId {
-            return Color.gray.opacity(0.1)  // More subtle selection highlight
+            return FlexokiColors.ui2(for: colorScheme)
         } else if entry.id == hoveredEntryId {
-            return Color.gray.opacity(0.05)  // Even more subtle hover state
+            return FlexokiColors.ui(for: colorScheme)
         } else {
             return Color.clear
         }
     }
-    
+
+    // Merge highlights with priority-based conflict resolution
+    private func mergeHighlights(_ highlights: [Highlight]) -> [(NSRange, NSColor)] {
+        // Sort by priority (high to low), then by position
+        let sorted = highlights.sorted {
+            $0.priority > $1.priority || ($0.priority == $1.priority && $0.range.location < $1.range.location)
+        }
+
+        // For overlapping ranges, higher priority wins
+        var merged: [(NSRange, NSColor)] = []
+        var covered: IndexSet = IndexSet()
+
+        for highlight in sorted {
+            let range = highlight.range
+            let rangeIndices = range.location..<(range.location + range.length)
+
+            // Only add if this range isn't already covered
+            if !covered.contains(integersIn: rangeIndices) {
+                merged.append((range, highlight.color))
+                covered.insert(integersIn: rangeIndices)
+            }
+        }
+
+        return merged
+    }
+
     private func updatePreviewText(for entry: HumanEntry) {
         let documentsDirectory = getDocumentsDirectory()
         let fileURL = documentsDirectory.appendingPathComponent(entry.filename)
@@ -1377,7 +1478,7 @@ struct ContentView: View {
         let font = NSFont(name: selectedFont, size: fontSize) ?? .systemFont(ofSize: fontSize)
         let textAttributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: NSColor(red: 0.20, green: 0.20, blue: 0.20, alpha: 1.0),
+            .foregroundColor: FlexokiColors.NS.base950,
             .paragraphStyle: paragraphStyle
         ]
         
@@ -1409,8 +1510,8 @@ struct ContentView: View {
             // Begin a new PDF page
             pdfContext.beginPage(mediaBox: nil)
             
-            // Fill the page with white background
-            pdfContext.setFillColor(NSColor.white.cgColor)
+            // Fill the page with paper background
+            pdfContext.setFillColor(FlexokiColors.NS.paper.cgColor)
             pdfContext.fill(CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight))
             
             // Create a frame for this page's text

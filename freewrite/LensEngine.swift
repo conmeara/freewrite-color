@@ -136,7 +136,7 @@ protocol WritingLens {
 struct PartsOfSpeechLens: WritingLens {
     let id = "pos"
     let name = "Parts of Speech"
-    let description = "Colors nouns, verbs, adjectives, adverbs, pronouns, and prepositions"
+    let description = "Colors nouns (blue), verbs (green), adjectives (purple), adverbs (orange), pronouns (magenta)"
     let category = "Grammar"
     let requiresAI = false
 
@@ -146,8 +146,7 @@ struct PartsOfSpeechLens: WritingLens {
             .verb: FlexokiColors.NS.green(for: scheme),
             .adjective: FlexokiColors.NS.purple(for: scheme),
             .adverb: FlexokiColors.NS.orange(for: scheme),
-            .pronoun: FlexokiColors.NS.magenta(for: scheme),
-            .preposition: FlexokiColors.NS.cyan(for: scheme)
+            .pronoun: FlexokiColors.NS.magenta(for: scheme)
         ]
     }
 
@@ -191,18 +190,78 @@ struct FillerLens: WritingLens {
     let requiresAI = false
 
     let fillers: Set<String> = [
+        // Original core fillers
         "very", "really", "just", "actually", "basically",
-        "literally", "definitely", "probably", "somewhat"
+        "literally", "definitely", "probably", "somewhat",
+
+        // Hedging words
+        "kind", "sort", "rather", "quite", "fairly", "pretty",
+
+        // Intensifiers
+        "extremely", "incredibly", "absolutely", "totally",
+        "completely", "utterly", "entirely",
+
+        // Vague qualifiers
+        "thing", "stuff", "something", "somehow", "someplace",
+
+        // Discourse markers
+        "well", "so", "now", "then", "like", "mean",
+
+        // Redundant adverbs
+        "simply", "merely", "only", "essentially",
+        "fundamentally", "particularly",
+
+        // Opinion softeners
+        "perhaps", "possibly", "maybe", "seemingly", "apparently",
+
+        // Time fillers
+        "currently", "presently"
     ]
 
+    func colorPool(for scheme: ColorScheme) -> [NSColor] {
+        return [
+            FlexokiColors.NS.red(for: scheme),
+            FlexokiColors.NS.orange(for: scheme),
+            FlexokiColors.NS.yellow(for: scheme),
+            FlexokiColors.NS.green(for: scheme),
+            FlexokiColors.NS.cyan(for: scheme),
+            FlexokiColors.NS.blue(for: scheme),
+            FlexokiColors.NS.purple(for: scheme),
+            FlexokiColors.NS.magenta(for: scheme)
+        ]
+    }
+
     func analyze(document: TextDocument, colorScheme: ColorScheme) async -> [Highlight] {
-        document.tokens.compactMap { token in
-            guard fillers.contains(token.text.lowercased()) else { return nil }
-            return Highlight(range: token.range,
-                           color: FlexokiColors.NS.red(for: colorScheme),
-                           category: "filler",
-                           priority: 3)
+        let colors = colorPool(for: colorScheme)
+        let opacities: [CGFloat] = [1.0, 0.7, 0.5]
+
+        // Group tokens by filler word (lowercased)
+        var fillerGroups: [String: [Token]] = [:]
+        for token in document.tokens {
+            let lowercased = token.text.lowercased()
+            if fillers.contains(lowercased) {
+                fillerGroups[lowercased, default: []].append(token)
+            }
         }
+
+        // Sort for consistent color assignment
+        let sortedFillers = fillerGroups.sorted { $0.key < $1.key }
+        var highlights: [Highlight] = []
+
+        for (index, (filler, tokens)) in sortedFillers.enumerated() {
+            let colorIndex = index % colors.count
+            let opacityIndex = (index / colors.count) % opacities.count
+            let color = colors[colorIndex].withAlphaComponent(opacities[opacityIndex])
+
+            for token in tokens {
+                highlights.append(Highlight(range: token.range,
+                                          color: color,
+                                          category: "filler-\(filler)",
+                                          priority: 3))
+            }
+        }
+
+        return highlights
     }
 }
 
@@ -221,10 +280,70 @@ struct SentenceLengthLens: WritingLens {
                 case .long: FlexokiColors.NS.red(for: colorScheme)
             }
             return Highlight(range: sentence.range,
-                           color: color.withAlphaComponent(0.15),
+                           color: color,
                            category: "sentence-\(sentence.length)",
                            priority: 0)
         }
+    }
+}
+
+struct PassiveVoiceLens: WritingLens {
+    let id = "passive"
+    let name = "Passive Voice"
+    let description = "Highlights passive constructions to encourage active voice"
+    let category = "Style"
+    let requiresAI = false
+
+    let beVerbs: Set<String> = [
+        "am", "is", "are", "was", "were", "be", "been", "being"
+    ]
+
+    func analyze(document: TextDocument, colorScheme: ColorScheme) async -> [Highlight] {
+        var highlights: [Highlight] = []
+        let tokens = document.tokens
+
+        for i in 0..<tokens.count {
+            let token = tokens[i]
+
+            // Check if current token is a "be" verb
+            guard beVerbs.contains(token.text.lowercased()) else { continue }
+
+            // Look ahead for past participle (skip adverbs like "being carefully written")
+            var lookAhead = 1
+            while i + lookAhead < tokens.count && lookAhead <= 3 {
+                let nextToken = tokens[i + lookAhead]
+
+                // Skip adverbs and other modifiers
+                if nextToken.lexicalClass == .adverb {
+                    lookAhead += 1
+                    continue
+                }
+
+                // Check if next content word is a verb (likely past participle in this context)
+                if nextToken.lexicalClass == .verb {
+                    // Highlight the entire passive construction
+                    let startRange = token.range
+                    let endRange = nextToken.range
+                    let combinedRange = NSRange(
+                        location: startRange.location,
+                        length: (endRange.location + endRange.length) - startRange.location
+                    )
+
+                    highlights.append(Highlight(
+                        range: combinedRange,
+                        color: FlexokiColors.NS.blue(for: colorScheme),
+                        category: "passive-voice",
+                        priority: 2
+                    ))
+                    break
+                }
+
+                // If we hit a noun or other non-verb, not passive
+                break
+            }
+        }
+
+        return highlights
     }
 }
 
@@ -236,17 +355,44 @@ struct RepetitionLens: WritingLens {
     let requiresAI = false
     let threshold = 3
 
+    func colorPool(for scheme: ColorScheme) -> [NSColor] {
+        return [
+            FlexokiColors.NS.red(for: scheme),
+            FlexokiColors.NS.orange(for: scheme),
+            FlexokiColors.NS.yellow(for: scheme),
+            FlexokiColors.NS.green(for: scheme),
+            FlexokiColors.NS.cyan(for: scheme),
+            FlexokiColors.NS.blue(for: scheme),
+            FlexokiColors.NS.purple(for: scheme),
+            FlexokiColors.NS.magenta(for: scheme)
+        ]
+    }
+
     func analyze(document: TextDocument, colorScheme: ColorScheme) async -> [Highlight] {
-        document.tokensByLemma
+        let colors = colorPool(for: colorScheme)
+        let opacities: [CGFloat] = [1.0, 0.7, 0.5]
+
+        // Get repeated lemmas sorted for consistent color assignment
+        let repeatedLemmas = document.tokensByLemma
             .filter { $0.value.count >= threshold }
-            .flatMap { _, tokens in
-                tokens.map { token in
-                    Highlight(range: token.range,
-                            color: FlexokiColors.NS.purple(for: colorScheme),
-                            category: "repetition",
-                            priority: 2)
-                }
+            .sorted { $0.key < $1.key }
+
+        var highlights: [Highlight] = []
+
+        for (index, (lemma, tokens)) in repeatedLemmas.enumerated() {
+            let colorIndex = index % colors.count
+            let opacityIndex = (index / colors.count) % opacities.count
+            let color = colors[colorIndex].withAlphaComponent(opacities[opacityIndex])
+
+            for token in tokens {
+                highlights.append(Highlight(range: token.range,
+                                          color: color,
+                                          category: "repetition-\(lemma)",
+                                          priority: 2))
             }
+        }
+
+        return highlights
     }
 }
 
@@ -259,6 +405,7 @@ class LensEngine: ObservableObject {
     let availableLenses: [WritingLens] = [
         PartsOfSpeechLens(),
         AdverbLens(),
+        PassiveVoiceLens(),
         FillerLens(),
         SentenceLengthLens(),
         RepetitionLens()

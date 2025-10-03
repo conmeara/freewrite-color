@@ -523,12 +523,17 @@ struct ContentView: View {
                                                         // Only queue complete sentences
                                                         guard sentence.isComplete else { continue }
 
-                                                        if sentenceCaches[lens.id]?[sentence.text] == nil {
+                                                        // Skip oversized sentences (>2500 chars)
+                                                        let trimmed = sentence.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                                                        guard trimmed.count <= 2500 else { continue }
+
+                                                        if sentenceCaches[lens.id]?[cacheKey(for: sentence.text)] == nil {
                                                             analysisQueue.enqueue(
                                                                 sentence: sentence.text,
                                                                 range: sentence.range,
                                                                 lensId: lens.id,
-                                                                priority: 1
+                                                                priority: 1,
+                                                                colorScheme: colorScheme
                                                             )
                                                             uncachedCount += 1
                                                         }
@@ -1180,20 +1185,25 @@ struct ContentView: View {
             loadExistingEntries()
 
             // Configure analysis queue
-            analysisQueue.configure(lensEngine: lensEngine) { [self] sentence, relativeHighlights in
-                // Update cache with completed analysis for current lens
-                guard let lensId = selectedLensId else { return }
-
-                if sentenceCaches[lensId] == nil {
-                    sentenceCaches[lensId] = [:]
+            analysisQueue.configure(lensEngine: lensEngine) { [self] sentence, requestLensId, relativeHighlights in
+                // Validate lens ID to prevent race conditions when switching lenses
+                // If user switched lenses during analysis, discard the result
+                if selectedLensId != requestLensId {
+                    print("⚠️ Discarding analysis for [\(requestLensId)] - user switched to [\(selectedLensId ?? "none")]")
+                    return
                 }
-                sentenceCaches[lensId]?[sentence] = relativeHighlights
+
+                // Update cache with completed analysis
+                if sentenceCaches[requestLensId] == nil {
+                    sentenceCaches[requestLensId] = [:]
+                }
+                sentenceCaches[requestLensId]?[cacheKey(for: sentence)] = relativeHighlights
 
                 // Rebuild highlights from updated cache
                 let sentences = extractAllSentences(from: text)
-                rebuildHighlightsFromCache(sentences: sentences, lensId: lensId)
+                rebuildHighlightsFromCache(sentences: sentences, lensId: requestLensId)
 
-                print("✅ Cached highlights for [\(lensId)]: '\(sentence.prefix(50))...'")
+                print("✅ Cached highlights for [\(requestLensId)]: '\(sentence.prefix(50))...'")
             }
 
             // Initialize adjective highlighter if available
@@ -1279,6 +1289,13 @@ struct ContentView: View {
 
                     print("🔄 Re-analyzing edited sentence: '\(editedSentence.text.prefix(50))...'")
 
+                    // Skip oversized sentences
+                    let trimmed = editedSentence.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard trimmed.count <= 2500 else {
+                        print("⏭️ Skipping oversized sentence (\(trimmed.count) chars)")
+                        return
+                    }
+
                     // Check if lens requires AI
                     let selectedLens = lensEngine.availableLenses.first { $0.id == lensId }
                     if selectedLens?.requiresAI == true {
@@ -1287,7 +1304,8 @@ struct ContentView: View {
                             sentence: editedSentence.text,
                             range: editedSentence.range,
                             lensId: lensId,
-                            priority: 0
+                            priority: 0,
+                            colorScheme: colorScheme
                         )
                     }
                 }
@@ -1302,7 +1320,7 @@ struct ContentView: View {
                 }
 
                 // Check if already cached for this lens
-                if sentenceCaches[lensId]?[sentence.text] != nil {
+                if sentenceCaches[lensId]?[cacheKey(for: sentence.text)] != nil {
                     continue
                 }
 
@@ -1310,6 +1328,13 @@ struct ContentView: View {
                 let trimmed = sentence.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.isEmpty {
                     print("⏭️ Skipping whitespace-only sentence")
+                    continue
+                }
+
+                // Skip sentences that are too long for AI analysis
+                // Context window is 4096 tokens (~12,000 chars), use 2500 char limit for safety
+                if trimmed.count > 2500 {
+                    print("⏭️ Skipping oversized sentence (\(trimmed.count) chars): '\(sentence.text.prefix(50))...'")
                     continue
                 }
 
@@ -1326,7 +1351,8 @@ struct ContentView: View {
                         sentence: sentence.text,
                         range: sentence.range,
                         lensId: lensId,
-                        priority: priority
+                        priority: priority,
+                        colorScheme: colorScheme
                     )
                 }
             }
@@ -1446,6 +1472,11 @@ struct ContentView: View {
         }
     }
 
+    // Normalize sentence text for cache key to prevent whitespace duplicates
+    private func cacheKey(for sentenceText: String) -> String {
+        return sentenceText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func extractAllSentences(from text: String) -> [SentenceInfo] {
         let tokenizer = NLTokenizer(unit: .sentence)
         tokenizer.string = text
@@ -1467,10 +1498,29 @@ struct ContentView: View {
 
         for i in 0..<minCount {
             if oldSentences[i].text != newSentences[i].text {
-                let edited = newSentences[i]
+                let oldSentence = oldSentences[i]
+                let newSentence = newSentences[i]
+
+                // Compare trimmed versions to ignore whitespace-only changes
+                let oldTrimmed = oldSentence.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let newTrimmed = newSentence.text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                // If trimmed content is identical, it's just whitespace changes - ignore
+                if oldTrimmed == newTrimmed {
+                    return nil
+                }
+
+                // If old is complete and new starts with it, user is typing after the sentence
+                // Example: "Conor was sad." -> "Conor was sad. H"
+                if oldSentence.isComplete && newTrimmed.hasPrefix(oldTrimmed) {
+                    // Not an edit - user is typing a new sentence after the complete one
+                    // Don't clear cache to prevent highlight flash
+                    return nil
+                }
+
                 // Only return if the edited sentence is complete
                 // Incomplete sentences should be ignored until finished
-                return edited.isComplete ? edited : nil
+                return newSentence.isComplete ? newSentence : nil
             }
         }
 
@@ -1486,7 +1536,7 @@ struct ContentView: View {
 
     private func rebuildHighlightsFromCache(sentences: [SentenceInfo], lensId: String) {
         highlightRanges = sentences.flatMap { sentence -> [(NSRange, NSColor)] in
-            guard let cachedHighlights = sentenceCaches[lensId]?[sentence.text] else { return [] }
+            guard let cachedHighlights = sentenceCaches[lensId]?[cacheKey(for: sentence.text)] else { return [] }
 
             return cachedHighlights.map { h in
                 let absoluteRange = NSRange(
@@ -1546,6 +1596,10 @@ struct ContentView: View {
     }
     
     private func loadEntry(entry: HumanEntry) {
+        // Cancel any pending analysis from previous document
+        analysisQueue.clear()
+        editDebounceTask?.cancel()
+
         let documentsDirectory = getDocumentsDirectory()
         let fileURL = documentsDirectory.appendingPathComponent(entry.filename)
 
@@ -1633,12 +1687,17 @@ struct ContentView: View {
                         // Only queue complete sentences
                         guard sentence.isComplete else { continue }
 
-                        if sentenceCaches[lensId]?[sentence.text] == nil {
+                        // Skip oversized sentences (>2500 chars)
+                        let trimmed = sentence.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard trimmed.count <= 2500 else { continue }
+
+                        if sentenceCaches[lensId]?[cacheKey(for: sentence.text)] == nil {
                             analysisQueue.enqueue(
                                 sentence: sentence.text,
                                 range: sentence.range,
                                 lensId: lensId,
-                                priority: 1
+                                priority: 1,
+                                colorScheme: colorScheme
                             )
                         }
                     }
@@ -1662,6 +1721,10 @@ struct ContentView: View {
     }
 
     private func createNewEntry() {
+        // Cancel any pending analysis from previous document
+        analysisQueue.clear()
+        editDebounceTask?.cancel()
+
         let newEntry = HumanEntry.createNew()
         entries.insert(newEntry, at: 0) // Add to the beginning
         selectedEntryId = newEntry.id
@@ -1962,7 +2025,7 @@ class SentenceAnalysisQueue: ObservableObject {
     private var pending: [AnalysisRequest] = []
     private var isProcessing = false
     private var lensEngine: LensEngine?
-    private var onComplete: ((String, [RelativeHighlight]) -> Void)?
+    private var onComplete: ((String, String, [RelativeHighlight]) -> Void)?
 
     struct AnalysisRequest: Identifiable {
         let id = UUID()
@@ -1970,14 +2033,15 @@ class SentenceAnalysisQueue: ObservableObject {
         let sentenceRange: NSRange
         let lensId: String
         let priority: Int // 0=edit, 1=typing, 2=paste
+        let colorScheme: ColorScheme
     }
 
-    func configure(lensEngine: LensEngine, onComplete: @escaping (String, [RelativeHighlight]) -> Void) {
+    func configure(lensEngine: LensEngine, onComplete: @escaping (String, String, [RelativeHighlight]) -> Void) {
         self.lensEngine = lensEngine
         self.onComplete = onComplete
     }
 
-    func enqueue(sentence: String, range: NSRange, lensId: String, priority: Int = 1) {
+    func enqueue(sentence: String, range: NSRange, lensId: String, priority: Int = 1, colorScheme: ColorScheme) {
         // Dedupe: same sentence + lens already pending
         pending.removeAll {
             $0.sentence == sentence && $0.lensId == lensId
@@ -1987,7 +2051,8 @@ class SentenceAnalysisQueue: ObservableObject {
             sentence: sentence,
             sentenceRange: range,
             lensId: lensId,
-            priority: priority
+            priority: priority,
+            colorScheme: colorScheme
         ))
 
         if !isProcessing {
@@ -2016,7 +2081,7 @@ class SentenceAnalysisQueue: ObservableObject {
             let highlights = await engine.analyzeWithAI(
                 text: request.sentence,
                 enabledLensIds: [request.lensId],
-                colorScheme: .light // TODO: Pass actual color scheme
+                colorScheme: request.colorScheme
             )
 
             // Convert to relative highlights
@@ -2031,8 +2096,8 @@ class SentenceAnalysisQueue: ObservableObject {
                 )
             }
 
-            // Notify completion
-            onComplete?(request.sentence, relativeHighlights)
+            // Notify completion with lensId to prevent race conditions
+            onComplete?(request.sentence, request.lensId, relativeHighlights)
         }
 
         isProcessing = false

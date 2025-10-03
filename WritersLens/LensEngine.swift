@@ -136,17 +136,15 @@ protocol WritingLens {
 struct PartsOfSpeechLens: WritingLens {
     let id = "pos"
     let name = "Parts of Speech"
-    let description = "Colors nouns (blue), verbs (green), adjectives (purple), adverbs (orange), pronouns (magenta)"
+    let description = "Colors nouns (blue), verbs (orange), adjectives (yellow)"
     let category = "Grammar"
     let requiresAI = false
 
     func colorMap(for scheme: ColorScheme) -> [NLTag: NSColor] {
         return [
             .noun: FlexokiColors.NS.blue(for: scheme),
-            .verb: FlexokiColors.NS.green(for: scheme),
-            .adjective: FlexokiColors.NS.purple(for: scheme),
-            .adverb: FlexokiColors.NS.orange(for: scheme),
-            .pronoun: FlexokiColors.NS.magenta(for: scheme)
+            .verb: FlexokiColors.NS.orange(for: scheme),
+            .adjective: FlexokiColors.NS.yellow(for: scheme)
         ]
     }
 

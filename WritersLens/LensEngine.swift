@@ -9,6 +9,7 @@ import Foundation
 import AppKit
 import NaturalLanguage
 import SwiftUI
+import FoundationModels
 
 // MARK: - Data Models
 
@@ -527,21 +528,156 @@ struct RhythmLens: WritingLens {
     }
 }
 
+// MARK: - AI-Powered Lenses
+
+@available(macOS 26.0, *)
+@Generable
+struct ShowVsTellAnalysis: Equatable {
+    @Guide(description: "A list of 'telling' phrases that should be shown through concrete details instead. Each phrase must be copied EXACTLY as it appears in the text, character-for-character.")
+    let tellingPhrases: [String]
+}
+
+@available(macOS 26.0, *)
+struct ShowVsTellLens: WritingLens {
+    let id = "show-vs-tell"
+    let name = "Show vs. Tell"
+    let description = "Highlights 'telling' statements that could be shown through concrete details"
+    let category = "AI Analysis"
+    let requiresAI = true
+
+    func analyze(document: TextDocument, colorScheme: ColorScheme) async -> [Highlight] {
+        // Only analyze if there's substantial text
+        guard document.text.count > 20 else {
+            print("❌ Show vs Tell: Text too short (\(document.text.count) chars)")
+            return []
+        }
+
+        // Strip leading newlines (the app adds "\n\n" to all text)
+        let textToAnalyze = String(document.text.trimmingPrefix(while: { $0.isNewline }))
+        let headerOffset = document.text.count - textToAnalyze.count
+
+        print("✅ Show vs Tell: Starting analysis of \(textToAnalyze.count) chars (offset: \(headerOffset))")
+
+        // Create session fresh each time
+        let session = LanguageModelSession(
+            instructions: Instructions {
+                """
+                Your job is to identify phrases that TELL abstract qualities, emotions, or states instead of SHOWING them through concrete details.
+
+                TELLING examples to flag:
+                - "was angry" / "felt angry" / "seemed angry"
+                - "was beautiful" / "looked beautiful"
+                - "was messy" / "looked messy"
+                - "was intimidating" / "seemed intimidating"
+                - "was nervous" / "felt nervous"
+                - "was worried" / "felt worried"
+                - "was frustrated" / "felt frustrated"
+
+                DO NOT flag:
+                - Dialogue (characters can tell things)
+                - Concrete actions or sensory details
+
+                CRITICAL: You must copy the EXACT text from the input, character-for-character. Do not paraphrase or summarize.
+                For example, if the text says "Sarah was nervous", return "Sarah was nervous" not "She was nervous".
+
+                Return the exact telling phrase and the character position where it starts (0-indexed).
+                """
+            }
+        )
+
+        do {
+            let stream = session.streamResponse(
+                generating: ShowVsTellAnalysis.self,
+                includeSchemaInPrompt: false,
+                options: GenerationOptions(sampling: .greedy)
+            ) {
+                "Find all telling phrases in this text. Copy each phrase EXACTLY as it appears:"
+                textToAnalyze
+            }
+
+            var tellingPhrases: [String] = []
+
+            for try await partialResponse in stream {
+                // Extract completed phrases from partially generated array
+                if let phrases = partialResponse.content.tellingPhrases {
+                    tellingPhrases = phrases.compactMap { $0 }
+                }
+            }
+
+            print("✅ Show vs Tell: AI returned \(tellingPhrases.count) phrases")
+            for phrase in tellingPhrases {
+                print("  - '\(phrase)'")
+            }
+
+            // Search for each phrase in the text and create highlights
+            let color = FlexokiColors.NS.red(for: colorScheme)
+            var highlights: [Highlight] = []
+            let nsString = document.text as NSString
+
+            for phrase in tellingPhrases {
+                // Search for this phrase in the document
+                let searchRange = NSRange(location: 0, length: nsString.length)
+                var searchPos = 0
+
+                while searchPos < nsString.length {
+                    let remainingRange = NSRange(location: searchPos, length: nsString.length - searchPos)
+                    let foundRange = nsString.range(of: phrase, options: [], range: remainingRange)
+
+                    if foundRange.location == NSNotFound {
+                        break
+                    }
+
+                    // Found a match - create highlight
+                    highlights.append(Highlight(
+                        range: foundRange,
+                        color: color,
+                        category: "telling",
+                        priority: 3
+                    ))
+
+                    print("  ✓ Found '\(phrase)' at position \(foundRange.location)")
+
+                    // Move search position forward to find next occurrence
+                    searchPos = foundRange.location + foundRange.length
+                }
+
+                if highlights.isEmpty || highlights.last?.range.location != searchPos - phrase.count {
+                    print("  ⚠️ Could not find '\(phrase)' in text")
+                }
+            }
+
+            print("✅ Show vs Tell: Created \(highlights.count) valid highlights")
+            return highlights
+        } catch {
+            print("❌ Show vs Tell analysis error: \(error)")
+            return []
+        }
+    }
+}
+
 // MARK: - Lens Engine
 
 @MainActor
 class LensEngine: ObservableObject {
     private let tokenizer = Tokenizer()
 
-    let availableLenses: [WritingLens] = [
-        PartsOfSpeechLens(),
-        AdverbLens(),
-        PassiveVoiceLens(),
-        FillerLens(),
-        SentenceLengthLens(),
-        RepetitionLens(),
-        RhythmLens()
-    ]
+    let availableLenses: [WritingLens] = {
+        var lenses: [WritingLens] = [
+            PartsOfSpeechLens(),
+            AdverbLens(),
+            PassiveVoiceLens(),
+            FillerLens(),
+            SentenceLengthLens(),
+            RepetitionLens(),
+            RhythmLens()
+        ]
+
+        if #available(macOS 26.0, *) {
+            lenses.append(ShowVsTellLens())
+        }
+
+        return lenses
+    }()
 
     func analyze(text: String, enabledLensIds: Set<String>, colorScheme: ColorScheme) async -> [Highlight] {
         let activeLenses = availableLenses.filter { enabledLensIds.contains($0.id) }
@@ -565,18 +701,24 @@ class LensEngine: ObservableObject {
     }
 
     func analyzeWithAI(text: String, enabledLensIds: Set<String>, colorScheme: ColorScheme) async -> [Highlight] {
+        print("🔍 analyzeWithAI called with lensIds: \(enabledLensIds)")
+
         let aiLenses = availableLenses.filter {
             $0.requiresAI && enabledLensIds.contains($0.id)
         }
+
+        print("🔍 Found \(aiLenses.count) AI lenses to run: \(aiLenses.map { $0.name })")
 
         var highlights: [Highlight] = []
 
         // Run AI lenses sequentially to avoid concurrent LanguageModelSession calls
         for lens in aiLenses {
+            print("🔍 Running AI lens: \(lens.name)")
             let document = tokenizer.tokenize(text)
             highlights.append(contentsOf: await lens.analyze(document: document, colorScheme: colorScheme))
         }
 
+        print("🔍 analyzeWithAI returning \(highlights.count) highlights")
         return highlights
     }
 }

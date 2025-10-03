@@ -458,7 +458,7 @@ struct ContentView: View {
                             Divider()
 
                             // Lenses grouped by category
-                            ForEach(["Grammar", "Style", "Clarity", "Readability"], id: \.self) { category in
+                            ForEach(["Grammar", "Style", "Clarity", "Readability", "AI Analysis"], id: \.self) { category in
                                 let categoryLenses = lensEngine.availableLenses.filter { $0.category == category }
                                 if !categoryLenses.isEmpty {
                                     // Category header
@@ -1166,9 +1166,14 @@ struct ContentView: View {
             // AI lenses: 3s debounce (for future AI lenses)
             aiAnalysisTask?.cancel()
             aiAnalysisTask = Task { @MainActor in
+                print("⏰ AI task started, waiting 3 seconds...")
                 try? await Task.sleep(for: .seconds(3))
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else {
+                    print("⏰ AI task was cancelled")
+                    return
+                }
 
+                print("⏰ AI task running with lensId: \(selectedLensId ?? "nil")")
                 if let lensId = selectedLensId {
                     let aiHighlights = await lensEngine.analyzeWithAI(
                         text: newValue,
@@ -1176,9 +1181,12 @@ struct ContentView: View {
                         colorScheme: colorScheme
                     )
 
+                    print("⏰ Got \(aiHighlights.count) AI highlights, merging with \(highlightRanges.count) fast highlights")
+
                     // Merge with existing fast highlights
                     let combined = highlightRanges.map { Highlight(range: $0.range, color: $0.color, category: "", priority: 1) } + aiHighlights
                     highlightRanges = mergeHighlights(combined)
+                    print("⏰ Final merged highlights: \(highlightRanges.count)")
                 }
             }
         }

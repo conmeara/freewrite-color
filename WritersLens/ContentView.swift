@@ -1441,7 +1441,7 @@ struct ContentView: View {
         let text: String
         let range: NSRange
         var isComplete: Bool {
-            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.hasSuffix(".") || trimmed.hasSuffix("!") || trimmed.hasSuffix("?")
         }
     }

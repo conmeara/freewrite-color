@@ -17,18 +17,18 @@ struct HumanEntry: Identifiable {
     let date: String
     let filename: String
     var previewText: String
-    
+
     static func createNew() -> HumanEntry {
         let id = UUID()
         let now = Date()
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
         let dateString = dateFormatter.string(from: now)
-        
+
         // For display
         dateFormatter.dateFormat = "MMM d"
         let displayDate = dateFormatter.string(from: now)
-        
+
         return HumanEntry(
             id: id,
             date: displayDate,
@@ -36,6 +36,13 @@ struct HumanEntry: Identifiable {
             previewText: ""
         )
     }
+}
+
+struct DocumentMetadata: Codable {
+    let sentenceCaches: [String: [String: [RelativeHighlight]]]  // [lensId: [sentence: highlights]]
+    let lensVersion: Int
+
+    static let currentVersion = 2  // Bumped to 2 for multi-lens support
 }
 
 struct HeartEmoji: Identifiable {
@@ -96,7 +103,13 @@ struct ContentView: View {
     @State private var aiAnalysisTask: Task<Void, Never>?
     @State private var showingLensSidebar = false // Left sidebar for lens selection
 
-    // Incremental AI analysis state
+    // Sentence-based caching state (NEW ARCHITECTURE)
+    // Per-lens caches: [lensId: [sentence: highlights]]
+    @State private var sentenceCaches: [String: [String: [RelativeHighlight]]] = [:]
+    @State private var editDebounceTask: Task<Void, Never>?
+    @State private var analysisQueue = SentenceAnalysisQueue()
+
+    // DEPRECATED: Will be removed after migration
     @State private var lastAnalyzedText: String = ""
     @State private var accumulatedAIHighlights: [Highlight] = []
 
@@ -485,35 +498,57 @@ struct ContentView: View {
                                         Button(action: {
                                             selectedLensId = lens.id
 
-                                            // Reset incremental AI state when switching lenses
-                                            lastAnalyzedText = ""
-                                            accumulatedAIHighlights = []
+                                            // Cancel pending tasks
+                                            analysisQueue.clear()
+                                            editDebounceTask?.cancel()
 
-                                            // Trigger re-analysis
-                                            fastAnalysisTask?.cancel()
-                                            aiAnalysisTask?.cancel()
+                                            print("🔄 Switched to lens: \(lens.name)")
 
-                                            fastAnalysisTask = Task { @MainActor in
-                                                let highlights = await lensEngine.analyze(
-                                                    text: text,
-                                                    enabledLensIds: [lens.id],
-                                                    colorScheme: colorScheme
-                                                )
+                                            if lens.requiresAI {
+                                                // AI lens: check cache first, then queue missing sentences
+                                                if !text.isEmpty {
+                                                    let sentences = extractAllSentences(from: text)
 
-                                                // If AI lens, analyze all existing text
-                                                if lens.requiresAI && !text.isEmpty {
-                                                    print("🔄 New AI lens selected, analyzing all text...")
-                                                    let aiHighlights = await lensEngine.analyzeWithAI(
+                                                    // Initialize cache for this lens if needed
+                                                    if sentenceCaches[lens.id] == nil {
+                                                        sentenceCaches[lens.id] = [:]
+                                                    }
+
+                                                    // Rebuild from existing cache first
+                                                    rebuildHighlightsFromCache(sentences: sentences, lensId: lens.id)
+
+                                                    // Queue only uncached COMPLETE sentences
+                                                    var uncachedCount = 0
+                                                    for sentence in sentences {
+                                                        // Only queue complete sentences
+                                                        guard sentence.isComplete else { continue }
+
+                                                        if sentenceCaches[lens.id]?[sentence.text] == nil {
+                                                            analysisQueue.enqueue(
+                                                                sentence: sentence.text,
+                                                                range: sentence.range,
+                                                                lensId: lens.id,
+                                                                priority: 1
+                                                            )
+                                                            uncachedCount += 1
+                                                        }
+                                                    }
+
+                                                    if uncachedCount > 0 {
+                                                        print("📋 Queued \(uncachedCount)/\(sentences.count) sentences for analysis")
+                                                    } else {
+                                                        print("✅ All sentences cached, instant display!")
+                                                    }
+                                                }
+                                            } else {
+                                                // Fast lens: analyze immediately
+                                                fastAnalysisTask?.cancel()
+                                                fastAnalysisTask = Task { @MainActor in
+                                                    let highlights = await lensEngine.analyze(
                                                         text: text,
                                                         enabledLensIds: [lens.id],
                                                         colorScheme: colorScheme
                                                     )
-                                                    accumulatedAIHighlights = aiHighlights
-                                                    lastAnalyzedText = text
-
-                                                    let combined = highlights + aiHighlights
-                                                    highlightRanges = mergeHighlights(combined)
-                                                } else {
                                                     highlightRanges = highlights.map { ($0.range, $0.color) }
                                                 }
                                             }
@@ -1144,6 +1179,23 @@ struct ContentView: View {
             showingSidebar = false  // Hide sidebar by default
             loadExistingEntries()
 
+            // Configure analysis queue
+            analysisQueue.configure(lensEngine: lensEngine) { [self] sentence, relativeHighlights in
+                // Update cache with completed analysis for current lens
+                guard let lensId = selectedLensId else { return }
+
+                if sentenceCaches[lensId] == nil {
+                    sentenceCaches[lensId] = [:]
+                }
+                sentenceCaches[lensId]?[sentence] = relativeHighlights
+
+                // Rebuild highlights from updated cache
+                let sentences = extractAllSentences(from: text)
+                rebuildHighlightsFromCache(sentences: sentences, lensId: lensId)
+
+                print("✅ Cached highlights for [\(lensId)]: '\(sentence.prefix(50))...'")
+            }
+
             // Initialize adjective highlighter if available
             if #available(macOS 26.0, *) {
                 adjectiveHighlighter = AdjectiveHighlighter()
@@ -1167,110 +1219,120 @@ struct ContentView: View {
                 fontSize = size
             }
         }
-        .onChange(of: text) { _, newValue in
+        .onChange(of: text) { oldValue, newValue in
             // Save current entry when text changes
             if let currentId = selectedEntryId,
                let currentEntry = entries.first(where: { $0.id == currentId }) {
                 saveEntry(entry: currentEntry)
             }
 
-            // Handle deletions and mid-document edits
-            if handleDeletionOrEdit(newText: newValue) {
-                // Reset and re-run fast analysis
-                if let lensId = selectedLensId {
-                    fastAnalysisTask?.cancel()
-                    fastAnalysisTask = Task { @MainActor in
-                        let highlights = await lensEngine.analyze(
-                            text: newValue,
-                            enabledLensIds: [lensId],
-                            colorScheme: colorScheme
-                        )
-                        highlightRanges = highlights.map { ($0.range, $0.color) }
-                    }
-                }
+            guard let lensId = selectedLensId else {
+                highlightRanges = []
                 return
             }
 
-            // Fast lenses: 200ms debounce (always run)
-            fastAnalysisTask?.cancel()
-            fastAnalysisTask = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(200))
-                guard !Task.isCancelled else { return }
+            // Get selected lens
+            let selectedLens = lensEngine.availableLenses.first { $0.id == lensId }
 
-                if let lensId = selectedLensId {
+            // Fast lenses: run immediately
+            if selectedLens?.requiresAI == false {
+                fastAnalysisTask?.cancel()
+                fastAnalysisTask = Task { @MainActor in
                     let highlights = await lensEngine.analyze(
                         text: newValue,
                         enabledLensIds: [lensId],
                         colorScheme: colorScheme
                     )
-
-                    // Merge fast highlights with accumulated AI highlights
-                    let combined = highlights + accumulatedAIHighlights
-                    highlightRanges = mergeHighlights(combined)
-                } else {
-                    highlightRanges = []
+                    highlightRanges = highlights.map { ($0.range, $0.color) }
                 }
-            }
-
-            // AI lenses: Incremental sentence-based analysis (instant trigger on sentence completion)
-            guard let lensId = selectedLensId else { return }
-
-            // Check if sentence just completed
-            guard endsWithSentence(newValue) else {
-                print("💭 Waiting for sentence completion...")
                 return
             }
 
-            // Extract new sentences
-            let newSentences = extractNewSentences(from: newValue, since: lastAnalyzedText)
-            guard !newSentences.isEmpty else { return }
+            // AI lenses: use sentence caching
+            // Extract sentences from old and new text
+            let oldSentences = extractAllSentences(from: oldValue)
+            let newSentences = extractAllSentences(from: newValue)
 
-            print("📝 Sentence completed! Analyzing \(newSentences.count) new sentence(s)")
-
-            // Cancel any pending AI task and start new one
-            aiAnalysisTask?.cancel()
-            aiAnalysisTask = Task { @MainActor in
-                // Analyze each new sentence independently
-                for sentence in newSentences {
-                    print("  → Analyzing: '\(sentence.prefix(50))...'")
-
-                    let sentenceHighlights = await lensEngine.analyzeWithAI(
-                        text: sentence,
-                        enabledLensIds: [lensId],
-                        colorScheme: colorScheme
-                    )
-
-                    // Adjust highlight positions based on where this sentence appears in full text
-                    let sentenceStartInFull = newValue.range(of: sentence)?.lowerBound ?? newValue.startIndex
-                    let offset = newValue.distance(from: newValue.startIndex, to: sentenceStartInFull)
-
-                    let adjustedHighlights = sentenceHighlights.map { highlight in
-                        Highlight(
-                            range: NSRange(location: highlight.range.location + offset, length: highlight.range.length),
-                            color: highlight.color,
-                            category: highlight.category,
-                            priority: highlight.priority
-                        )
-                    }
-
-                    accumulatedAIHighlights.append(contentsOf: adjustedHighlights)
-                    print("  ✓ Found \(adjustedHighlights.count) issues")
+            // Detect edited sentence
+            if let editedSentence = findEditedSentence(oldSentences: oldSentences, newSentences: newSentences) {
+                // Skip whitespace-only sentences
+                let trimmed = editedSentence.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    print("⏭️ Skipping whitespace-only sentence")
+                    rebuildHighlightsFromCache(sentences: newSentences, lensId: lensId)
+                    return
                 }
 
-                // Update lastAnalyzedText to current text
-                lastAnalyzedText = newValue
+                print("✏️ Sentence edited: '\(editedSentence.text.prefix(50))...'")
 
-                // Merge all highlights
-                let fastHighlights = await lensEngine.analyze(
-                    text: newValue,
-                    enabledLensIds: [lensId],
-                    colorScheme: colorScheme
-                )
-                let combined = fastHighlights + accumulatedAIHighlights
-                highlightRanges = mergeHighlights(combined)
+                // Clear cache for edited sentence immediately (for this lens)
+                sentenceCaches[lensId]?[editedSentence.text] = nil
 
-                print("✅ Total highlights: \(highlightRanges.count) (\(accumulatedAIHighlights.count) AI + \(fastHighlights.count) fast)")
+                // Rebuild highlights (edited sentence will disappear)
+                rebuildHighlightsFromCache(sentences: newSentences, lensId: lensId)
+
+                // Debounce re-analysis (500ms after user stops editing)
+                editDebounceTask?.cancel()
+                editDebounceTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard !Task.isCancelled else { return }
+
+                    print("🔄 Re-analyzing edited sentence: '\(editedSentence.text.prefix(50))...'")
+
+                    // Check if lens requires AI
+                    let selectedLens = lensEngine.availableLenses.first { $0.id == lensId }
+                    if selectedLens?.requiresAI == true {
+                        // Queue for AI analysis with high priority (0 = highest)
+                        analysisQueue.enqueue(
+                            sentence: editedSentence.text,
+                            range: editedSentence.range,
+                            lensId: lensId,
+                            priority: 0
+                        )
+                    }
+                }
+                return
             }
+
+            // Queue new COMPLETE sentences (not in cache for this lens)
+            for sentence in newSentences {
+                // Skip incomplete sentences - wait until they're finished
+                guard sentence.isComplete else {
+                    continue
+                }
+
+                // Check if already cached for this lens
+                if sentenceCaches[lensId]?[sentence.text] != nil {
+                    continue
+                }
+
+                // Skip whitespace-only sentences
+                let trimmed = sentence.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    print("⏭️ Skipping whitespace-only sentence")
+                    continue
+                }
+
+                print("📝 Complete sentence detected: '\(sentence.text.prefix(50))...'")
+
+                // Check if lens requires AI
+                let selectedLens = lensEngine.availableLenses.first { $0.id == lensId }
+                if selectedLens?.requiresAI == true {
+                    // Determine priority based on sentence ending
+                    let isPaste = (newSentences.count - oldSentences.count) > 1
+                    let priority = isPaste ? 2 : 1
+
+                    analysisQueue.enqueue(
+                        sentence: sentence.text,
+                        range: sentence.range,
+                        lensId: lensId,
+                        priority: priority
+                    )
+                }
+            }
+
+            // Rebuild highlights from cache
+            rebuildHighlightsFromCache(sentences: newSentences, lensId: lensId)
         }
         .onReceive(timer) { _ in
             if timerIsRunning && timeRemaining > 0 {
@@ -1373,6 +1435,69 @@ struct ContentView: View {
         return merged
     }
 
+    // MARK: - Sentence-Based Caching Helpers (NEW)
+
+    struct SentenceInfo {
+        let text: String
+        let range: NSRange
+        var isComplete: Bool {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            return trimmed.hasSuffix(".") || trimmed.hasSuffix("!") || trimmed.hasSuffix("?")
+        }
+    }
+
+    private func extractAllSentences(from text: String) -> [SentenceInfo] {
+        let tokenizer = NLTokenizer(unit: .sentence)
+        tokenizer.string = text
+
+        var sentences: [SentenceInfo] = []
+        tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
+            let sentenceText = String(text[range])
+            let nsRange = NSRange(range, in: text)
+            sentences.append(SentenceInfo(text: sentenceText, range: nsRange))
+            return true
+        }
+
+        return sentences
+    }
+
+    private func findEditedSentence(oldSentences: [SentenceInfo], newSentences: [SentenceInfo]) -> SentenceInfo? {
+        // Find first COMPLETE sentence that differs
+        let minCount = min(oldSentences.count, newSentences.count)
+
+        for i in 0..<minCount {
+            if oldSentences[i].text != newSentences[i].text {
+                let edited = newSentences[i]
+                // Only return if the edited sentence is complete
+                // Incomplete sentences should be ignored until finished
+                return edited.isComplete ? edited : nil
+            }
+        }
+
+        // If new complete sentence was added at the end, return it
+        if newSentences.count > oldSentences.count,
+           let lastSentence = newSentences.last,
+           lastSentence.isComplete {
+            return lastSentence
+        }
+
+        return nil
+    }
+
+    private func rebuildHighlightsFromCache(sentences: [SentenceInfo], lensId: String) {
+        highlightRanges = sentences.flatMap { sentence -> [(NSRange, NSColor)] in
+            guard let cachedHighlights = sentenceCaches[lensId]?[sentence.text] else { return [] }
+
+            return cachedHighlights.map { h in
+                let absoluteRange = NSRange(
+                    location: sentence.range.location + h.offsetFromSentenceStart,
+                    length: h.length
+                )
+                return (absoluteRange, h.color.nsColor)
+            }
+        }
+    }
+
     private func updatePreviewText(for entry: HumanEntry) {
         let documentsDirectory = getDocumentsDirectory()
         let fileURL = documentsDirectory.appendingPathComponent(entry.filename)
@@ -1396,10 +1521,24 @@ struct ContentView: View {
     private func saveEntry(entry: HumanEntry) {
         let documentsDirectory = getDocumentsDirectory()
         let fileURL = documentsDirectory.appendingPathComponent(entry.filename)
-        
+
         do {
+            // Save text content
             try text.write(to: fileURL, atomically: true, encoding: .utf8)
-            print("Successfully saved entry: \(entry.filename)")
+
+            // Save metadata with all lens caches
+            let metadata = DocumentMetadata(
+                sentenceCaches: sentenceCaches,
+                lensVersion: DocumentMetadata.currentVersion
+            )
+
+            let metadataURL = documentsDirectory.appendingPathComponent(entry.filename.replacingOccurrences(of: ".md", with: ".meta.json"))
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .prettyPrinted
+            let metadataData = try encoder.encode(metadata)
+            try metadataData.write(to: metadataURL, options: .atomic)
+
+            print("Successfully saved entry and metadata: \(entry.filename)")
             updatePreviewText(for: entry)  // Update preview after saving
         } catch {
             print("Error saving entry: \(error)")
@@ -1409,10 +1548,41 @@ struct ContentView: View {
     private func loadEntry(entry: HumanEntry) {
         let documentsDirectory = getDocumentsDirectory()
         let fileURL = documentsDirectory.appendingPathComponent(entry.filename)
-        
+
         do {
             if fileManager.fileExists(atPath: fileURL.path) {
+                // Load text content
                 text = try String(contentsOf: fileURL, encoding: .utf8)
+
+                // Load metadata if it exists
+                let metadataURL = documentsDirectory.appendingPathComponent(entry.filename.replacingOccurrences(of: ".md", with: ".meta.json"))
+
+                if fileManager.fileExists(atPath: metadataURL.path) {
+                    let metadataData = try Data(contentsOf: metadataURL)
+                    let decoder = JSONDecoder()
+                    let metadata = try decoder.decode(DocumentMetadata.self, from: metadataData)
+
+                    // Only restore cache if version matches
+                    if metadata.lensVersion == DocumentMetadata.currentVersion {
+                        sentenceCaches = metadata.sentenceCaches
+
+                        // Rebuild highlights for current lens if one is selected
+                        if let lensId = selectedLensId {
+                            let sentences = extractAllSentences(from: text)
+                            rebuildHighlightsFromCache(sentences: sentences, lensId: lensId)
+                        }
+
+                        let totalCached = sentenceCaches.values.map { $0.count }.reduce(0, +)
+                        print("✅ Restored \(sentenceCaches.count) lens caches with \(totalCached) total sentences")
+                    } else {
+                        print("⚠️ Metadata version mismatch (v\(metadata.lensVersion) vs v\(DocumentMetadata.currentVersion)), clearing cache")
+                        sentenceCaches = [:]
+                    }
+                } else {
+                    print("ℹ️ No metadata file found, starting fresh")
+                    sentenceCaches = [:]
+                }
+
                 print("Successfully loaded entry: \(entry.filename)")
             }
         } catch {
@@ -1437,19 +1607,57 @@ struct ContentView: View {
             selectedLensId = allLenses.first?.id
         }
 
-        // Trigger re-analysis
-        fastAnalysisTask?.cancel()
-        fastAnalysisTask = Task { @MainActor in
-            if let lensId = selectedLensId {
-                let highlights = await lensEngine.analyze(
-                    text: text,
-                    enabledLensIds: [lensId],
-                    colorScheme: colorScheme
-                )
-                highlightRanges = highlights.map { ($0.range, $0.color) }
+        // Cancel pending tasks
+        analysisQueue.clear()
+        editDebounceTask?.cancel()
+
+        // Trigger analysis based on lens type
+        if let lensId = selectedLensId,
+           let lens = allLenses.first(where: { $0.id == lensId }) {
+
+            if lens.requiresAI {
+                // AI lens: check cache first, then queue missing sentences
+                if !text.isEmpty {
+                    let sentences = extractAllSentences(from: text)
+
+                    // Initialize cache for this lens if needed
+                    if sentenceCaches[lensId] == nil {
+                        sentenceCaches[lensId] = [:]
+                    }
+
+                    // Rebuild from existing cache first
+                    rebuildHighlightsFromCache(sentences: sentences, lensId: lensId)
+
+                    // Queue only uncached COMPLETE sentences
+                    for sentence in sentences {
+                        // Only queue complete sentences
+                        guard sentence.isComplete else { continue }
+
+                        if sentenceCaches[lensId]?[sentence.text] == nil {
+                            analysisQueue.enqueue(
+                                sentence: sentence.text,
+                                range: sentence.range,
+                                lensId: lensId,
+                                priority: 1
+                            )
+                        }
+                    }
+                }
             } else {
-                highlightRanges = []
+                // Fast lens: analyze immediately
+                fastAnalysisTask?.cancel()
+                fastAnalysisTask = Task { @MainActor in
+                    let highlights = await lensEngine.analyze(
+                        text: text,
+                        enabledLensIds: [lensId],
+                        colorScheme: colorScheme
+                    )
+                    highlightRanges = highlights.map { ($0.range, $0.color) }
+                }
             }
+        } else {
+            // No lens selected
+            highlightRanges = []
         }
     }
 
@@ -1744,6 +1952,90 @@ struct ContentView: View {
         pdfContext.closePDF()
         
         return pdfData as Data
+    }
+}
+
+// MARK: - Sentence Analysis Queue
+
+@MainActor
+class SentenceAnalysisQueue: ObservableObject {
+    private var pending: [AnalysisRequest] = []
+    private var isProcessing = false
+    private var lensEngine: LensEngine?
+    private var onComplete: ((String, [RelativeHighlight]) -> Void)?
+
+    struct AnalysisRequest: Identifiable {
+        let id = UUID()
+        let sentence: String
+        let sentenceRange: NSRange
+        let lensId: String
+        let priority: Int // 0=edit, 1=typing, 2=paste
+    }
+
+    func configure(lensEngine: LensEngine, onComplete: @escaping (String, [RelativeHighlight]) -> Void) {
+        self.lensEngine = lensEngine
+        self.onComplete = onComplete
+    }
+
+    func enqueue(sentence: String, range: NSRange, lensId: String, priority: Int = 1) {
+        // Dedupe: same sentence + lens already pending
+        pending.removeAll {
+            $0.sentence == sentence && $0.lensId == lensId
+        }
+
+        pending.append(AnalysisRequest(
+            sentence: sentence,
+            sentenceRange: range,
+            lensId: lensId,
+            priority: priority
+        ))
+
+        if !isProcessing {
+            Task {
+                await processQueue()
+            }
+        }
+    }
+
+    func clear() {
+        pending.removeAll()
+    }
+
+    private func processQueue() async {
+        guard !isProcessing else { return }
+        isProcessing = true
+
+        while !pending.isEmpty {
+            // Sort by priority (0 = highest)
+            pending.sort { $0.priority < $1.priority }
+            let request = pending.removeFirst()
+
+            // Analyze this sentence
+            guard let engine = lensEngine else { continue }
+
+            let highlights = await engine.analyzeWithAI(
+                text: request.sentence,
+                enabledLensIds: [request.lensId],
+                colorScheme: .light // TODO: Pass actual color scheme
+            )
+
+            // Convert to relative highlights
+            // NOTE: highlights are already relative to sentence start (position 0)
+            // since we analyzed just the sentence text, not the full document
+            let relativeHighlights = highlights.map { h in
+                RelativeHighlight(
+                    offsetFromSentenceStart: h.range.location,
+                    length: h.range.length,
+                    color: CodableColor(h.color),
+                    matchText: (request.sentence as NSString).substring(with: h.range)
+                )
+            }
+
+            // Notify completion
+            onComplete?(request.sentence, relativeHighlights)
+        }
+
+        isProcessing = false
     }
 }
 

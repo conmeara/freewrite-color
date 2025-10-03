@@ -52,6 +52,33 @@ struct Highlight {
     let priority: Int  // 0=background, 1=low, 2=medium, 3=high
 }
 
+struct RelativeHighlight: Codable, Equatable {
+    let offsetFromSentenceStart: Int
+    let length: Int
+    let color: CodableColor
+    let matchText: String
+}
+
+struct CodableColor: Codable, Equatable {
+    let red: CGFloat
+    let green: CGFloat
+    let blue: CGFloat
+    let alpha: CGFloat
+
+    init(_ nsColor: NSColor) {
+        // Convert to RGB color space if needed
+        let rgbColor = nsColor.usingColorSpace(.deviceRGB) ?? nsColor
+        self.red = rgbColor.redComponent
+        self.green = rgbColor.greenComponent
+        self.blue = rgbColor.blueComponent
+        self.alpha = rgbColor.alphaComponent
+    }
+
+    var nsColor: NSColor {
+        NSColor(red: red, green: green, blue: blue, alpha: alpha)
+    }
+}
+
 // MARK: - Tokenizer
 
 class Tokenizer {
@@ -561,25 +588,19 @@ struct ShowVsTellLens: WritingLens {
         let session = LanguageModelSession(
             instructions: Instructions {
                 """
-                Your job is to identify phrases that TELL abstract qualities, emotions, or states instead of SHOWING them through concrete details.
+                Find phrases that TELL emotions or qualities instead of SHOWING them.
 
-                TELLING examples to flag:
-                - "was angry" / "felt angry" / "seemed angry"
-                - "was beautiful" / "looked beautiful"
-                - "was messy" / "looked messy"
-                - "was intimidating" / "seemed intimidating"
-                - "was nervous" / "felt nervous"
-                - "was worried" / "felt worried"
-                - "was frustrated" / "felt frustrated"
+                Look for patterns like:
+                • "was [adjective]" (was nervous, was angry, was beautiful)
+                • "felt [adjective]" (felt scared, felt worried)
+                • "seemed [adjective]" (seemed intimidating)
+                • "looked [adjective]" (looked messy)
 
-                DO NOT flag:
-                - Dialogue (characters can tell things)
-                - Concrete actions or sensory details
+                Skip dialogue and concrete actions.
 
-                CRITICAL: You must copy the EXACT text from the input, character-for-character. Do not paraphrase or summarize.
-                For example, if the text says "Sarah was nervous", return "Sarah was nervous" not "She was nervous".
-
-                Return the exact telling phrase and the character position where it starts (0-indexed).
+                IMPORTANT: Copy the EXACT phrase from the text, character-for-character.
+                If the text says "Sarah was nervous", return "Sarah was nervous" exactly.
+                Only return phrases that actually appear in the text below.
                 """
             }
         )

@@ -546,17 +546,16 @@ struct ShowVsTellLens: WritingLens {
     let requiresAI = true
 
     func analyze(document: TextDocument, colorScheme: ColorScheme) async -> [Highlight] {
-        // Only analyze if there's substantial text
-        guard document.text.count > 20 else {
+        // Only analyze if there's substantial text (relaxed for single sentences)
+        guard document.text.count > 5 else {
             print("❌ Show vs Tell: Text too short (\(document.text.count) chars)")
             return []
         }
 
-        // Strip leading newlines (the app adds "\n\n" to all text)
-        let textToAnalyze = String(document.text.trimmingPrefix(while: { $0.isNewline }))
-        let headerOffset = document.text.count - textToAnalyze.count
+        // Strip leading/trailing whitespace for clean analysis
+        let textToAnalyze = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        print("✅ Show vs Tell: Starting analysis of \(textToAnalyze.count) chars (offset: \(headerOffset))")
+        print("✅ Show vs Tell: Starting analysis of \(textToAnalyze.count) chars")
 
         // Create session fresh each time
         let session = LanguageModelSession(

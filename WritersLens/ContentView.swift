@@ -10,6 +10,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import PDFKit
+import NaturalLanguage
 
 struct HumanEntry: Identifiable {
     let id: UUID
@@ -94,6 +95,10 @@ struct ContentView: View {
     @State private var fastAnalysisTask: Task<Void, Never>?
     @State private var aiAnalysisTask: Task<Void, Never>?
     @State private var showingLensSidebar = false // Left sidebar for lens selection
+
+    // Incremental AI analysis state
+    @State private var lastAnalyzedText: String = ""
+    @State private var accumulatedAIHighlights: [Highlight] = []
 
     // Legacy adjective highlighting (keep for AI lens migration)
     @State private var adjectiveHighlighter: Any?
@@ -429,6 +434,8 @@ struct ContentView: View {
                             Button(action: {
                                 selectedLensId = nil
                                 highlightRanges = []
+                                lastAnalyzedText = ""
+                                accumulatedAIHighlights = []
                             }) {
                                 HStack(alignment: .top, spacing: 12) {
                                     // Radio button
@@ -478,15 +485,37 @@ struct ContentView: View {
                                         Button(action: {
                                             selectedLensId = lens.id
 
+                                            // Reset incremental AI state when switching lenses
+                                            lastAnalyzedText = ""
+                                            accumulatedAIHighlights = []
+
                                             // Trigger re-analysis
                                             fastAnalysisTask?.cancel()
+                                            aiAnalysisTask?.cancel()
+
                                             fastAnalysisTask = Task { @MainActor in
                                                 let highlights = await lensEngine.analyze(
                                                     text: text,
                                                     enabledLensIds: [lens.id],
                                                     colorScheme: colorScheme
                                                 )
-                                                highlightRanges = highlights.map { ($0.range, $0.color) }
+
+                                                // If AI lens, analyze all existing text
+                                                if lens.requiresAI && !text.isEmpty {
+                                                    print("🔄 New AI lens selected, analyzing all text...")
+                                                    let aiHighlights = await lensEngine.analyzeWithAI(
+                                                        text: text,
+                                                        enabledLensIds: [lens.id],
+                                                        colorScheme: colorScheme
+                                                    )
+                                                    accumulatedAIHighlights = aiHighlights
+                                                    lastAnalyzedText = text
+
+                                                    let combined = highlights + aiHighlights
+                                                    highlightRanges = mergeHighlights(combined)
+                                                } else {
+                                                    highlightRanges = highlights.map { ($0.range, $0.color) }
+                                                }
                                             }
                                         }) {
                                             HStack(alignment: .top, spacing: 12) {
@@ -1145,7 +1174,24 @@ struct ContentView: View {
                 saveEntry(entry: currentEntry)
             }
 
-            // Fast lenses: 200ms debounce
+            // Handle deletions and mid-document edits
+            if handleDeletionOrEdit(newText: newValue) {
+                // Reset and re-run fast analysis
+                if let lensId = selectedLensId {
+                    fastAnalysisTask?.cancel()
+                    fastAnalysisTask = Task { @MainActor in
+                        let highlights = await lensEngine.analyze(
+                            text: newValue,
+                            enabledLensIds: [lensId],
+                            colorScheme: colorScheme
+                        )
+                        highlightRanges = highlights.map { ($0.range, $0.color) }
+                    }
+                }
+                return
+            }
+
+            // Fast lenses: 200ms debounce (always run)
             fastAnalysisTask?.cancel()
             fastAnalysisTask = Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(200))
@@ -1157,37 +1203,73 @@ struct ContentView: View {
                         enabledLensIds: [lensId],
                         colorScheme: colorScheme
                     )
-                    highlightRanges = highlights.map { ($0.range, $0.color) }
+
+                    // Merge fast highlights with accumulated AI highlights
+                    let combined = highlights + accumulatedAIHighlights
+                    highlightRanges = mergeHighlights(combined)
                 } else {
                     highlightRanges = []
                 }
             }
 
-            // AI lenses: 3s debounce (for future AI lenses)
+            // AI lenses: Incremental sentence-based analysis (instant trigger on sentence completion)
+            guard let lensId = selectedLensId else { return }
+
+            // Check if sentence just completed
+            guard endsWithSentence(newValue) else {
+                print("💭 Waiting for sentence completion...")
+                return
+            }
+
+            // Extract new sentences
+            let newSentences = extractNewSentences(from: newValue, since: lastAnalyzedText)
+            guard !newSentences.isEmpty else { return }
+
+            print("📝 Sentence completed! Analyzing \(newSentences.count) new sentence(s)")
+
+            // Cancel any pending AI task and start new one
             aiAnalysisTask?.cancel()
             aiAnalysisTask = Task { @MainActor in
-                print("⏰ AI task started, waiting 3 seconds...")
-                try? await Task.sleep(for: .seconds(3))
-                guard !Task.isCancelled else {
-                    print("⏰ AI task was cancelled")
-                    return
-                }
+                // Analyze each new sentence independently
+                for sentence in newSentences {
+                    print("  → Analyzing: '\(sentence.prefix(50))...'")
 
-                print("⏰ AI task running with lensId: \(selectedLensId ?? "nil")")
-                if let lensId = selectedLensId {
-                    let aiHighlights = await lensEngine.analyzeWithAI(
-                        text: newValue,
+                    let sentenceHighlights = await lensEngine.analyzeWithAI(
+                        text: sentence,
                         enabledLensIds: [lensId],
                         colorScheme: colorScheme
                     )
 
-                    print("⏰ Got \(aiHighlights.count) AI highlights, merging with \(highlightRanges.count) fast highlights")
+                    // Adjust highlight positions based on where this sentence appears in full text
+                    let sentenceStartInFull = newValue.range(of: sentence)?.lowerBound ?? newValue.startIndex
+                    let offset = newValue.distance(from: newValue.startIndex, to: sentenceStartInFull)
 
-                    // Merge with existing fast highlights
-                    let combined = highlightRanges.map { Highlight(range: $0.range, color: $0.color, category: "", priority: 1) } + aiHighlights
-                    highlightRanges = mergeHighlights(combined)
-                    print("⏰ Final merged highlights: \(highlightRanges.count)")
+                    let adjustedHighlights = sentenceHighlights.map { highlight in
+                        Highlight(
+                            range: NSRange(location: highlight.range.location + offset, length: highlight.range.length),
+                            color: highlight.color,
+                            category: highlight.category,
+                            priority: highlight.priority
+                        )
+                    }
+
+                    accumulatedAIHighlights.append(contentsOf: adjustedHighlights)
+                    print("  ✓ Found \(adjustedHighlights.count) issues")
                 }
+
+                // Update lastAnalyzedText to current text
+                lastAnalyzedText = newValue
+
+                // Merge all highlights
+                let fastHighlights = await lensEngine.analyze(
+                    text: newValue,
+                    enabledLensIds: [lensId],
+                    colorScheme: colorScheme
+                )
+                let combined = fastHighlights + accumulatedAIHighlights
+                highlightRanges = mergeHighlights(combined)
+
+                print("✅ Total highlights: \(highlightRanges.count) (\(accumulatedAIHighlights.count) AI + \(fastHighlights.count) fast)")
             }
         }
         .onReceive(timer) { _ in
@@ -1218,6 +1300,52 @@ struct ContentView: View {
         } else {
             return Color.clear
         }
+    }
+
+    // MARK: - Incremental Sentence Analysis Helpers
+
+    private func extractNewSentences(from text: String, since lastAnalyzed: String) -> [String] {
+        // Get only the new text
+        guard text.count > lastAnalyzed.count else { return [] }
+        let newText = String(text.dropFirst(lastAnalyzed.count))
+
+        // Split into sentences using Natural Language framework
+        let tokenizer = NLTokenizer(unit: .sentence)
+        tokenizer.string = newText
+
+        var sentences: [String] = []
+        tokenizer.enumerateTokens(in: newText.startIndex..<newText.endIndex) { range, _ in
+            let sentence = String(newText[range])
+            sentences.append(sentence)
+            return true
+        }
+
+        return sentences
+    }
+
+    private func endsWithSentence(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        return trimmed.hasSuffix(".") || trimmed.hasSuffix("!") || trimmed.hasSuffix("?")
+    }
+
+    private func handleDeletionOrEdit(newText: String) -> Bool {
+        // Deletion detected
+        if newText.count < lastAnalyzedText.count {
+            print("🔄 Deletion detected, clearing AI highlights")
+            accumulatedAIHighlights = []
+            lastAnalyzedText = ""
+            return true
+        }
+
+        // Mid-document edit detected (user editing earlier text)
+        if !newText.hasPrefix(lastAnalyzedText) {
+            print("🔄 Mid-document edit detected, clearing AI highlights")
+            accumulatedAIHighlights = []
+            lastAnalyzedText = ""
+            return true
+        }
+
+        return false
     }
 
     // Merge highlights with priority-based conflict resolution

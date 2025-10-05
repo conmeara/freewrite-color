@@ -120,13 +120,28 @@ Entries are saved as markdown files in `~/Documents/WritersLens/` with pattern:
 
 ## File Organization
 
-- `WritersLensApp.swift` - App entry point, font registration, menu commands
-- `ContentView.swift` - Main UI and business logic (monolithic by design)
-- `ColoredTextEditor.swift` - Custom editable text view with color support
-- `LensEngine.swift` - Writing analysis lens system and implementations
-- `FlexokiColors.swift` - Color palette for lens highlighting
-- `AdjectiveHighlighter.swift` - Legacy AI-powered adjective detection (kept for reference)
-- `AdjectiveHighlightTestView.swift` - Standalone test view (kept for reference)
-- `TextAnalysisTest.swift` - Original MVP test (kept for reference)
-- `default.md` - Welcome/demo message for first-time users
-- `fonts/` - Lato font family (registered at app launch)
+The project follows Swift best practices with organized folders:
+
+```
+WritersLens/
+├── App/
+│   ├── WritersLensApp.swift - App entry point, font registration, menu commands
+│   └── ContentView.swift - Main UI and business logic (monolithic by design)
+├── Views/
+│   └── ColoredTextEditor.swift - Custom editable text view with color support
+├── Lenses/
+│   └── LensEngine.swift - Writing analysis lens system and implementations
+├── Resources/
+│   ├── FlexokiColors.swift - Color palette for lens highlighting
+│   ├── default.md - Welcome/demo message for first-time users
+│   └── fonts/ - Lato font family (registered at app launch)
+├── Legacy/
+│   ├── AdjectiveHighlighter.swift - Legacy AI-powered adjective detection
+│   ├── AdjectiveHighlightTestView.swift - Standalone test view
+│   └── TextAnalysisTest.swift - Original MVP test
+├── Assets.xcassets - App icons and assets
+├── Preview Content/ - SwiftUI preview assets
+└── WritersLens.entitlements - App capabilities
+```
+
+Note: The project uses Xcode's file system synchronization (objectVersion 77), so folders are automatically detected without manual .pbxproj updates.

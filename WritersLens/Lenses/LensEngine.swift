@@ -9,7 +9,6 @@ import Foundation
 import AppKit
 import NaturalLanguage
 import SwiftUI
-import FoundationModels
 
 // MARK: - Data Models
 
@@ -154,7 +153,6 @@ protocol WritingLens {
     var name: String { get }
     var description: String { get }
     var category: String { get }
-    var requiresAI: Bool { get }
 
     func analyze(document: TextDocument, colorScheme: ColorScheme) async -> [Highlight]
 }
@@ -166,7 +164,6 @@ struct PartsOfSpeechLens: WritingLens {
     let name = "Parts of Speech"
     let description = "Colors nouns (blue), verbs (orange), adjectives (yellow)"
     let category = "Grammar"
-    let requiresAI = false
 
     func colorMap(for scheme: ColorScheme) -> [NLTag: NSColor] {
         return [
@@ -194,7 +191,6 @@ struct AdverbLens: WritingLens {
     let name = "Adverb Overuse"
     let description = "Highlights adverbs and -ly words for concise writing"
     let category = "Style"
-    let requiresAI = false
 
     func analyze(document: TextDocument, colorScheme: ColorScheme) async -> [Highlight] {
         document.tokens.compactMap { token in
@@ -213,7 +209,6 @@ struct FillerLens: WritingLens {
     let name = "Filler Words"
     let description = "Identifies unnecessary words like 'very', 'really', 'just', 'actually'"
     let category = "Clarity"
-    let requiresAI = false
 
     let fillers: Set<String> = [
         // Original core fillers
@@ -296,7 +291,6 @@ struct SentenceLengthLens: WritingLens {
     let name = "Sentence Length"
     let description = "Shows sentence variety: green (short), yellow (medium), red (long)"
     let category = "Readability"
-    let requiresAI = false
 
     func analyze(document: TextDocument, colorScheme: ColorScheme) async -> [Highlight] {
         document.sentences.map { sentence in
@@ -318,7 +312,6 @@ struct PassiveVoiceLens: WritingLens {
     let name = "Passive Voice"
     let description = "Highlights passive constructions to encourage active voice"
     let category = "Style"
-    let requiresAI = false
 
     let beVerbs: Set<String> = [
         "am", "is", "are", "was", "were", "be", "been", "being"
@@ -378,7 +371,6 @@ struct RepetitionLens: WritingLens {
     let name = "Word Repetition"
     let description = "Highlights words used 3+ times to vary vocabulary"
     let category = "Style"
-    let requiresAI = false
     let threshold = 3
 
     func colorPool(for scheme: ColorScheme) -> [NSColor] {
@@ -427,7 +419,6 @@ struct RhythmLens: WritingLens {
     let name = "Rhythm"
     let description = "Shows writing rhythm - cool colors indicate variety, warm colors indicate monotony"
     let category = "Style"
-    let requiresAI = false
 
     enum RhythmCategory: String {
         case veryShort = "very-short"
@@ -556,124 +547,7 @@ struct RhythmLens: WritingLens {
 }
 
 // MARK: - AI-Powered Lenses
-
-@available(macOS 26.0, *)
-@Generable
-struct ShowVsTellAnalysis: Equatable {
-    @Guide(description: "A list of 'telling' phrases that should be shown through concrete details instead. Each phrase must be copied EXACTLY as it appears in the text, character-for-character.")
-    let tellingPhrases: [String]
-}
-
-@available(macOS 26.0, *)
-struct ShowVsTellLens: WritingLens {
-    let id = "show-vs-tell"
-    let name = "Show vs. Tell"
-    let description = "Highlights 'telling' statements that could be shown through concrete details"
-    let category = "AI Analysis"
-    let requiresAI = true
-
-    func analyze(document: TextDocument, colorScheme: ColorScheme) async -> [Highlight] {
-        // Only analyze if there's substantial text (relaxed for single sentences)
-        guard document.text.count > 5 else {
-            print("❌ Show vs Tell: Text too short (\(document.text.count) chars)")
-            return []
-        }
-
-        // Strip leading/trailing whitespace for clean analysis
-        let textToAnalyze = document.text.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        print("✅ Show vs Tell: Starting analysis of \(textToAnalyze.count) chars")
-
-        // Create session fresh each time
-        let session = LanguageModelSession(
-            instructions: Instructions {
-                """
-                Find phrases that TELL emotions or qualities instead of SHOWING them.
-
-                Look for patterns like:
-                • "was [adjective]" (was nervous, was angry, was beautiful)
-                • "felt [adjective]" (felt scared, felt worried)
-                • "seemed [adjective]" (seemed intimidating)
-                • "looked [adjective]" (looked messy)
-
-                Skip dialogue and concrete actions.
-
-                IMPORTANT: Copy the EXACT phrase from the text, character-for-character.
-                If the text says "Sarah was nervous", return "Sarah was nervous" exactly.
-                Only return phrases that actually appear in the text below.
-                """
-            }
-        )
-
-        do {
-            let stream = session.streamResponse(
-                generating: ShowVsTellAnalysis.self,
-                includeSchemaInPrompt: false,
-                options: GenerationOptions(sampling: .greedy)
-            ) {
-                "Find all telling phrases in this text. Copy each phrase EXACTLY as it appears:"
-                textToAnalyze
-            }
-
-            var tellingPhrases: [String] = []
-
-            for try await partialResponse in stream {
-                // Extract completed phrases from partially generated array
-                if let phrases = partialResponse.content.tellingPhrases {
-                    tellingPhrases = phrases.compactMap { $0 }
-                }
-            }
-
-            print("✅ Show vs Tell: AI returned \(tellingPhrases.count) phrases")
-            for phrase in tellingPhrases {
-                print("  - '\(phrase)'")
-            }
-
-            // Search for each phrase in the text and create highlights
-            let color = FlexokiColors.NS.red(for: colorScheme)
-            var highlights: [Highlight] = []
-            let nsString = document.text as NSString
-
-            for phrase in tellingPhrases {
-                // Search for this phrase in the document
-                let searchRange = NSRange(location: 0, length: nsString.length)
-                var searchPos = 0
-
-                while searchPos < nsString.length {
-                    let remainingRange = NSRange(location: searchPos, length: nsString.length - searchPos)
-                    let foundRange = nsString.range(of: phrase, options: [], range: remainingRange)
-
-                    if foundRange.location == NSNotFound {
-                        break
-                    }
-
-                    // Found a match - create highlight
-                    highlights.append(Highlight(
-                        range: foundRange,
-                        color: color,
-                        category: "telling",
-                        priority: 3
-                    ))
-
-                    print("  ✓ Found '\(phrase)' at position \(foundRange.location)")
-
-                    // Move search position forward to find next occurrence
-                    searchPos = foundRange.location + foundRange.length
-                }
-
-                if highlights.isEmpty || highlights.last?.range.location != searchPos - phrase.count {
-                    print("  ⚠️ Could not find '\(phrase)' in text")
-                }
-            }
-
-            print("✅ Show vs Tell: Created \(highlights.count) valid highlights")
-            return highlights
-        } catch {
-            print("❌ Show vs Tell analysis error: \(error)")
-            return []
-        }
-    }
-}
+// (Reserved for future AI-powered analysis features)
 
 // MARK: - Lens Engine
 
@@ -681,34 +555,25 @@ struct ShowVsTellLens: WritingLens {
 class LensEngine: ObservableObject {
     private let tokenizer = Tokenizer()
 
-    let availableLenses: [WritingLens] = {
-        var lenses: [WritingLens] = [
-            PartsOfSpeechLens(),
-            AdverbLens(),
-            PassiveVoiceLens(),
-            FillerLens(),
-            SentenceLengthLens(),
-            RepetitionLens(),
-            RhythmLens()
-        ]
-
-        if #available(macOS 26.0, *) {
-            lenses.append(ShowVsTellLens())
-        }
-
-        return lenses
-    }()
+    let availableLenses: [WritingLens] = [
+        PartsOfSpeechLens(),
+        AdverbLens(),
+        PassiveVoiceLens(),
+        FillerLens(),
+        SentenceLengthLens(),
+        RepetitionLens(),
+        RhythmLens()
+    ]
 
     func analyze(text: String, enabledLensIds: Set<String>, colorScheme: ColorScheme) async -> [Highlight] {
         let activeLenses = availableLenses.filter { enabledLensIds.contains($0.id) }
-        let fastLenses = activeLenses.filter { !$0.requiresAI }
 
         // Tokenize once
         let document = tokenizer.tokenize(text)
 
-        // Run fast lenses in parallel
+        // Run all lenses in parallel
         return await withTaskGroup(of: [Highlight].self) { group in
-            for lens in fastLenses {
+            for lens in activeLenses {
                 group.addTask { await lens.analyze(document: document, colorScheme: colorScheme) }
             }
 
@@ -718,27 +583,5 @@ class LensEngine: ObservableObject {
             }
             return allHighlights
         }
-    }
-
-    func analyzeWithAI(text: String, enabledLensIds: Set<String>, colorScheme: ColorScheme) async -> [Highlight] {
-        print("🔍 analyzeWithAI called with lensIds: \(enabledLensIds)")
-
-        let aiLenses = availableLenses.filter {
-            $0.requiresAI && enabledLensIds.contains($0.id)
-        }
-
-        print("🔍 Found \(aiLenses.count) AI lenses to run: \(aiLenses.map { $0.name })")
-
-        var highlights: [Highlight] = []
-
-        // Run AI lenses sequentially to avoid concurrent LanguageModelSession calls
-        for lens in aiLenses {
-            print("🔍 Running AI lens: \(lens.name)")
-            let document = tokenizer.tokenize(text)
-            highlights.append(contentsOf: await lens.analyze(document: document, colorScheme: colorScheme))
-        }
-
-        print("🔍 analyzeWithAI returning \(highlights.count) highlights")
-        return highlights
     }
 }

@@ -16,8 +16,6 @@ Filler Words catches words that clutter your writing. This is very really quite 
 
 Sentence Length reveals rhythm through color. Short punches hard. Medium-length sentences provide balanced rhythm and give readers breathing room. Long sentences can become difficult to follow, especially when they contain multiple subordinate clauses, complex ideas, and elaborate descriptions that might be better expressed through multiple simpler statements that allow readers to process information without becoming overwhelmed by syntactic complexity.
 
-Show vs. Tell (AI-powered) finds statements that tell emotions instead of showing them. Sarah was nervous before the interview. The house looked messy and chaotic. The sunset was beautiful and peaceful. Compare these to showing: Sarah's hands trembled as she checked her resume for the third time. Dishes overflowed from the sink onto counters buried under unopened mail. Golden light painted the clouds while waves whispered against the shore.
-
 Each lens reveals different patterns. Try them all. Watch your writing transform as you cycle through the views.
 
 Writers Lens gives you instant feedback on your craft.

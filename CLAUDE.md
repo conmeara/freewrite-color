@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is **Writers Lens**, a macOS writing analysis app with real-time text highlighting. It's a native SwiftUI app that uses Apple's on-device Foundation Models framework and Natural Language framework to analyze and highlight writing patterns.
+This is **Writers Lens**, a macOS writing analysis app with real-time text highlighting. It's a native SwiftUI app that uses Apple's Natural Language framework to analyze and highlight writing patterns.
 
 Forked from the original Freewrite app by Farza (github.com/farzaa/freewrite).
 
@@ -20,9 +20,9 @@ xcodebuild -scheme WritersLens -configuration Debug build
 
 ## System Requirements
 
-- **macOS 26.0+** (Tahoe) - Required for Foundation Models framework
-- **Xcode 26** - Required for building
-- **Apple Silicon** - Required for on-device AI
+- **macOS 13.0+** (Ventura) - Required for SwiftUI and Natural Language framework
+- **Xcode 15+** - Required for building
+- **Apple Silicon or Intel** - Universal app support
 
 ## Architecture
 
@@ -49,10 +49,9 @@ The app uses a **lens-based architecture** for real-time text analysis:
 
 1. **LensEngine** (`LensEngine.swift`)
    - Manages multiple writing analysis lenses
-   - Available lenses: Parts of Speech, Adverb Overuse, Passive Voice, Filler Words, Sentence Length, Word Repetition
+   - Available lenses: Parts of Speech, Adverb Overuse, Passive Voice, Filler Words, Sentence Length, Word Repetition, Rhythm
    - Each lens implements the `WritingLens` protocol
    - Uses Natural Language framework for tokenization and linguistic analysis
-   - Some lenses can use Foundation Models for AI-powered analysis (marked with `requiresAI: true`)
 
 2. **Concurrency Management** (in `ContentView.swift`)
    - `analysisTask: Task<Void, Never>?` - Tracks current analysis task
@@ -75,15 +74,6 @@ ColoredTextEditor applies colors via NSAttributedString
 
 SwiftUI's `TextEditor` doesn't expose `NSTextStorage`, making attributed text (colors) impossible. `NSViewRepresentable` is the standard SwiftUI pattern for bridging to AppKit when needed.
 
-### Preventing Concurrent AI Requests
-
-Every keystroke triggers `onChange(text)`. Without proper guards, this creates multiple overlapping AI requests. The error looks like:
-```
-concurrentRequests(FoundationModels.LanguageModelSession.GenerationError.Context...)
-```
-
-**Solution**: Task cancellation + `isHighlighting` flag ensures only one AI request runs at a time.
-
 ### Text Formatting Preservation
 
 Text must always start with `"\n\n"` (enforced in `ContentView`). The custom editor preserves:
@@ -102,21 +92,13 @@ Entries are saved as markdown files in `~/Documents/WritersLens/` with pattern:
 
 ## Common Patterns
 
-### Adding New Text Analysis Features
+### Adding New Lenses
 
-1. Create new `@Generable` struct in separate file (like `AdjectiveHighlighter.swift`)
-2. Add `LanguageModelSession` with custom instructions
-3. Add state to `ContentView`: ranges array, analyzer instance, task tracker, `isAnalyzing` flag
-4. Add to `onChange(text)` with task cancellation pattern
-5. Pass highlight ranges to `ColoredTextEditor`
-
-### Working with FoundationModels
-
-- Always use `@available(macOS 26.0, *)` annotations
-- Use `@Generable` macro for structured output
-- Stream responses with `streamResponse(generating:)`
-- Access partial data: `partialResponse.content.fieldName`
-- Never make concurrent requests to same session
+1. Create a new struct that implements the `WritingLens` protocol in `LensEngine.swift`
+2. Implement the `analyze(document:colorScheme:)` method using Natural Language framework
+3. Add the lens to `availableLenses` array in `LensEngine`
+4. Use tokenization and NLTagger for linguistic analysis
+5. Return `[Highlight]` array with ranges, colors, and categories
 
 ## File Organization
 

@@ -13,7 +13,7 @@ import SwiftUI
 struct RepetitionLens: WritingLens {
     let id = "repetition"
     let name = "Word Repetition"
-    let description = "Highlights words used 3+ times to vary vocabulary"
+    let description = "Highlights content words used 3+ times to vary vocabulary"
     let category = "Style"
     let threshold = 3
 
@@ -34,8 +34,21 @@ struct RepetitionLens: WritingLens {
         let colors = colorPool(for: colorScheme)
         let opacities: [CGFloat] = [1.0, 0.7, 0.5]
 
+        // Content word tags to analyze (skip function words)
+        let contentWordTags: Set<NLTag> = [.noun, .verb, .adjective, .adverb]
+
+        // Filter to only content words, then get repeated lemmas
+        let contentWordsByLemma = document.tokensByLemma.mapValues { tokens in
+            tokens.filter { token in
+                if let tag = token.lexicalClass {
+                    return contentWordTags.contains(tag)
+                }
+                return false
+            }
+        }
+
         // Get repeated lemmas sorted for consistent color assignment
-        let repeatedLemmas = document.tokensByLemma
+        let repeatedLemmas = contentWordsByLemma
             .filter { $0.value.count >= threshold }
             .sorted { $0.key < $1.key }
 

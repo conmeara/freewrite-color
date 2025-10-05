@@ -67,7 +67,7 @@ struct ColoredTextEditor: NSViewRepresentable {
 
         // Set initial cursor position after the leading "\n\n"
         DispatchQueue.main.async {
-            if textView.string.hasPrefix("\n\n") && textView.string.count == 2 {
+            if textView.string.hasPrefix("\n\n") {
                 textView.setSelectedRange(NSRange(location: 2, length: 0))
             }
         }

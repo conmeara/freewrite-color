@@ -1,9 +1,3 @@
-//
-//  WritersLensApp.swift
-//  Writers Lens
-//
-//  Created by thorfinn on 2/14/25.
-//
 
 import SwiftUI
 

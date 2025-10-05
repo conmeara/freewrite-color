@@ -1,14 +1,14 @@
 # Writers Lens
 
-A macOS writing analysis app with real-time text highlighting powered by Apple's on-device AI.
+A macOS writing analysis app with real-time text highlighting.
 
-Writers Lens helps you improve your writing by revealing patterns through multiple analysis "lenses" - from parts of speech to passive voice to AI-powered show vs. tell detection.
+Writers Lens helps you improve your writing by revealing patterns through multiple analysis "lenses" - from parts of speech to passive voice to word repetition.
 
 ![Writers Lens Screenshot](screenshot.png)
 
 ## Features
 
-**8 Writing Lenses:**
+**7 Writing Lenses:**
 
 - **Parts of Speech** - Colors nouns, verbs, and adjectives to reveal grammatical structure
 - **Adverb Overuse** - Highlights -ly words and adverbs that weaken prose
@@ -17,13 +17,12 @@ Writers Lens helps you improve your writing by revealing patterns through multip
 - **Rhythm** - Analyzes sentence length patterns using color temperature
 - **Filler Words** - Catches unnecessary words like "very", "really", "just"
 - **Sentence Length** - Color-codes short, medium, and long sentences
-- **Show vs. Tell** (AI-powered) - Finds "telling" statements that could be shown through concrete details
 
 ## Requirements
 
-- **macOS 26.0+** (Tahoe) - Required for Foundation Models framework
-- **Apple Silicon** - Required for on-device AI features
-- **Xcode 26** - Required for building
+- **macOS 13.0+** (Ventura or later)
+- **Intel or Apple Silicon**
+- **Xcode 15+** for building
 
 ## Building
 
@@ -44,7 +43,6 @@ xcodebuild -scheme WritersLens -configuration Debug build
 
 Built with SwiftUI and AppKit using:
 - **Natural Language framework** for tokenization and linguistic analysis
-- **Foundation Models framework** for AI-powered lenses
 - **Custom NSTextView** for attributed text editing with real-time highlights
 - **Lens-based analysis system** for modular writing pattern detection
 

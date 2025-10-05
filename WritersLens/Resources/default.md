@@ -1,6 +1,6 @@
 Welcome to Writers Lens.
 
-This app reveals patterns in your writing through real-time analysis. Try cycling through each lens using the sidebar to see different aspects of your text.
+This app reveals patterns in your writing through real-time analysis. Try cycling through each lens using the left sidebar to see different aspects of your text.
 
 Parts of Speech colors your words by grammatical role. Nouns appear in blue, verbs glow in orange, and adjectives shine in yellow. Watch how this sentence transforms: The quick brown fox jumps over the lazy dog. Every noun, verb, and adjective becomes visible through color.
 
